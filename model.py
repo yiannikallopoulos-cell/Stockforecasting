@@ -165,18 +165,89 @@ def _df_series(df,*names):
                 if result: return result
     return {}
 
+def _yf_session():
+    """Return a requests session that avoids Yahoo 429 rate limiting."""
+    import requests as req
+    import random
+    session = req.Session()
+    agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    ]
+    session.headers.update({
+        "User-Agent": random.choice(agents),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    })
+    return session
+
+
 def yfinance_fetch(ticker):
-    yf=_ensure_yfinance()
+    yf = _ensure_yfinance()
     print(f"    Downloading {ticker} via yfinance...")
-    t=yf.Ticker(ticker)
-    try: info=t.info or {}
-    except: info={}
-    try: is_df=t.income_stmt
-    except: is_df=None
-    try: bs_df=t.balance_sheet
-    except: bs_df=None
-    try: cf_df=t.cashflow
-    except: cf_df=None
+
+    # Use a custom session to avoid 429 rate limiting on shared IPs
+    session = _yf_session()
+    t = yf.Ticker(ticker, session=session)
+
+    # Retry info fetch up to 3 times with backoff
+    info = {}
+    for attempt in range(3):
+        try:
+            raw = t.info
+            if raw and len(raw) > 5:
+                info = raw
+                break
+        except Exception as e:
+            print(f"    info attempt {attempt+1} failed: {e}")
+        if attempt < 2:
+            time.sleep(2 + attempt * 2)
+
+    # If info still empty, try fast_info as fallback
+    if not info or len(info) < 5:
+        try:
+            fi = t.fast_info
+            info = {
+                "currentPrice":      getattr(fi,"last_price",None),
+                "regularMarketPrice":getattr(fi,"last_price",None),
+                "marketCap":         getattr(fi,"market_cap",None),
+                "sharesOutstanding": getattr(fi,"shares",None),
+                "currency":          getattr(fi,"currency","USD"),
+                "exchange":          getattr(fi,"exchange",""),
+                "longName":          ticker.upper(),
+            }
+            print(f"    Used fast_info fallback for {ticker}")
+        except Exception as e:
+            print(f"    fast_info also failed: {e}")
+
+    # Financial statements — retry each with delay
+    is_df = bs_df = cf_df = None
+    for attempt in range(2):
+        try:
+            if is_df is None:
+                is_df = t.income_stmt
+        except Exception:
+            pass
+        try:
+            if bs_df is None:
+                bs_df = t.balance_sheet
+        except Exception:
+            pass
+        try:
+            if cf_df is None:
+                cf_df = t.cashflow
+        except Exception:
+            pass
+        if is_df is not None and bs_df is not None and cf_df is not None:
+            break
+        if attempt == 0:
+            time.sleep(2)
 
     price=_info_val(info,"currentPrice","regularMarketPrice","previousClose") or 0
     mkt_cap=_info_val(info,"marketCap") or 0
@@ -302,7 +373,16 @@ def yfinance_fetch(ticker):
 def yfinance_single(ticker):
     yf=_ensure_yfinance()
     try:
-        t=yf.Ticker(ticker); info=t.info or {}
+        session=_yf_session()
+        t=yf.Ticker(ticker, session=session)
+        info={}
+        for attempt in range(2):
+            try:
+                raw=t.info
+                if raw and len(raw)>5: info=raw; break
+            except: pass
+            if attempt==0: time.sleep(1)
+        if not info: return {}
         if not _info_val(info,"currentPrice","regularMarketPrice","previousClose"): return {}
         return {
             "name":info.get("longName") or info.get("shortName") or ticker,

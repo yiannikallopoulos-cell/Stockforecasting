@@ -90,13 +90,22 @@ def test():
     except Exception as e:
         results["network_sec"] = f"FAILED: {e}"
 
-    # 4. Check yfinance can fetch a ticker
+    # 4. Check yfinance can fetch a ticker (with session to avoid 429)
     try:
         import yfinance as yf
-        t    = yf.Ticker("AAPL")
-        info = t.info or {}
-        px   = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose")
-        results["yfinance_AAPL"] = f"OK price={px}"
+        import random
+        session = __import__("requests").Session()
+        session.headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15"
+        t    = yf.Ticker("AAPL", session=session)
+        info = {}
+        for attempt in range(3):
+            try:
+                raw = t.info
+                if raw and len(raw) > 5: info = raw; break
+            except: pass
+            __import__("time").sleep(2)
+        px = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose")
+        results["yfinance_AAPL"] = f"OK price={px}" if px else f"WARNING: got info but no price. Keys={list(info.keys())[:8]}"
     except Exception as e:
         results["yfinance_AAPL"] = f"FAILED: {e}"
 
