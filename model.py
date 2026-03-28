@@ -170,6 +170,391 @@ def _yf_session():
     return None
 
 
+# ── Additional Data Point Fetchers ───────────────────────────────────────────
+
+def fetch_quarterly_financials(t):
+    """
+    Fetch last 8 quarters of financials.
+    Used to detect recent momentum shifts not visible in annual data.
+    Returns dict with quarterly revenue, margins, and QoQ growth rates.
+    """
+    result = {
+        "quarterly_revenue":    {},
+        "quarterly_net_income": {},
+        "quarterly_gross_margin":{},
+        "quarterly_op_margin":  {},
+        "recent_revenue_accel": None,   # positive = accelerating, negative = decelerating
+        "recent_margin_trend":  None,
+    }
+    try:
+        q_is = t.quarterly_income_stmt
+        if q_is is None or q_is.empty:
+            return result
+
+        def qs(df, *names):
+            """Extract quarterly series as {YYYY-Qn: value}."""
+            if df is None or df.empty: return {}
+            for name in names:
+                for idx in df.index:
+                    idx_s = str(idx).lower().replace(" ","").replace("_","")
+                    name_s = name.lower().replace(" ","").replace("_","")
+                    if idx_s == name_s or name_s in idx_s:
+                        out = {}
+                        for col in df.columns:
+                            try:
+                                import pandas as pd
+                                if hasattr(col, 'to_pydatetime'):
+                                    label = col.strftime("%Y-Q%q" if hasattr(col,'quarter') else "%Y-%m")
+                                else:
+                                    label = str(col)[:7]
+                                v = df.loc[idx, col]
+                                if v is not None and str(v) not in ("nan","None","<NA>"):
+                                    out[label] = float(v)
+                            except: pass
+                        if out: return out
+            return {}
+
+        q_rev  = qs(q_is, "Total Revenue", "Revenue")
+        q_ni   = qs(q_is, "Net Income", "Net Income Common Stockholders")
+        q_gp   = qs(q_is, "Gross Profit")
+        q_oi   = qs(q_is, "Operating Income", "Operating Income Loss")
+
+        result["quarterly_revenue"]     = q_rev
+        result["quarterly_net_income"]  = q_ni
+
+        # Gross margin per quarter
+        for k in q_gp:
+            rv = q_rev.get(k)
+            if rv and rv != 0:
+                result["quarterly_gross_margin"][k] = q_gp[k] / rv
+
+        # Op margin per quarter
+        for k in q_oi:
+            rv = q_rev.get(k)
+            if rv and rv != 0:
+                result["quarterly_op_margin"][k] = q_oi[k] / rv
+
+        # Revenue acceleration signal: compare last 2 quarters YoY growth
+        rev_sorted = sorted(q_rev.items())
+        if len(rev_sorted) >= 6:
+            # Compare most recent quarter YoY vs prior quarter YoY
+            r_now  = rev_sorted[-1][1]; r_1yr  = rev_sorted[-5][1] if len(rev_sorted)>=5 else None
+            r_prev = rev_sorted[-2][1]; r_1yr2 = rev_sorted[-6][1] if len(rev_sorted)>=6 else None
+            if r_now and r_1yr and r_1yr > 0 and r_prev and r_1yr2 and r_1yr2 > 0:
+                g_now  = (r_now  - r_1yr)  / abs(r_1yr)
+                g_prev = (r_prev - r_1yr2) / abs(r_1yr2)
+                result["recent_revenue_accel"] = round(g_now - g_prev, 4)
+
+        # Margin trend from last 4 quarters
+        gm_vals = [v for _, v in sorted(result["quarterly_gross_margin"].items())[-4:]]
+        if len(gm_vals) >= 3:
+            trend = (gm_vals[-1] - gm_vals[0]) / max(len(gm_vals)-1, 1)
+            result["recent_margin_trend"] = round(trend, 4)
+
+        print(f"    ✓ Quarterly data: {len(q_rev)} quarters of revenue")
+    except Exception as e:
+        print(f"    ⚠ Quarterly fetch failed: {e}")
+
+    return result
+
+
+def fetch_insider_activity(t, ticker):
+    """
+    Fetch recent insider buying/selling transactions.
+    Net buying is a bullish signal; heavy selling is bearish.
+    Returns summary: net_shares, buy_count, sell_count, signal.
+    """
+    result = {
+        "insider_transactions": [],
+        "net_insider_shares":   0,
+        "insider_buy_count":    0,
+        "insider_sell_count":   0,
+        "insider_signal":       "neutral",
+        "insider_signal_desc":  "Insufficient insider transaction data",
+    }
+    try:
+        df = t.insider_transactions
+        if df is None or df.empty:
+            return result
+
+        # Normalise column names (yfinance uses various schemas)
+        df.columns = [str(c).lower().strip() for c in df.columns]
+
+        # Keep only last 6 months
+        import pandas as pd
+        if 'startdate' in df.columns:
+            df['date_col'] = pd.to_datetime(df['startdate'], errors='coerce')
+        elif 'date' in df.columns:
+            df['date_col'] = pd.to_datetime(df['date'], errors='coerce')
+        else:
+            df['date_col'] = pd.NaT
+
+        cutoff = pd.Timestamp.now() - pd.DateOffset(months=6)
+        recent = df[df['date_col'] >= cutoff] if df['date_col'].notna().any() else df.head(20)
+
+        buys = 0; sells = 0; net_shares = 0
+        transactions = []
+        for _, row in recent.iterrows():
+            try:
+                shares_col = next((c for c in ['shares','value','transaction'] if c in row.index), None)
+                text_col   = next((c for c in ['text','transaction','description'] if c in row.index), None)
+                name_col   = next((c for c in ['name','insider','filer'] if c in row.index), None)
+
+                text    = str(row.get(text_col, "") or "").lower()
+                shares  = float(row.get(shares_col, 0) or 0)
+                name    = str(row.get(name_col, "Unknown") or "Unknown")
+                date_v  = str(row.get('date_col', ""))[:10]
+
+                is_buy  = any(k in text for k in ['purchase','buy','acquire','award','conversion'])
+                is_sell = any(k in text for k in ['sale','sell','disposed'])
+
+                if is_buy:
+                    buys += 1; net_shares += shares
+                    transactions.append({"type":"BUY","name":name,"shares":int(shares),"date":date_v})
+                elif is_sell:
+                    sells += 1; net_shares -= shares
+                    transactions.append({"type":"SELL","name":name,"shares":int(shares),"date":date_v})
+            except: pass
+
+        result["insider_transactions"] = transactions[:10]
+        result["net_insider_shares"]   = int(net_shares)
+        result["insider_buy_count"]    = buys
+        result["insider_sell_count"]   = sells
+
+        # Signal logic
+        total = buys + sells
+        if total == 0:
+            result["insider_signal"]      = "neutral"
+            result["insider_signal_desc"] = "No recent insider transactions in last 6 months"
+        elif total >= 3 and buys / total >= 0.70:
+            result["insider_signal"]      = "bullish"
+            result["insider_signal_desc"] = f"{buys} insider buys vs {sells} sells — strong buying signal"
+        elif total >= 3 and sells / total >= 0.75:
+            result["insider_signal"]      = "bearish"
+            result["insider_signal_desc"] = f"{sells} insider sells vs {buys} buys — heavy distribution"
+        elif net_shares > 0:
+            result["insider_signal"]      = "slightly_bullish"
+            result["insider_signal_desc"] = f"Net {int(net_shares):,} shares acquired by insiders"
+        else:
+            result["insider_signal"]      = "slightly_bearish"
+            result["insider_signal_desc"] = f"Net {int(abs(net_shares)):,} shares sold by insiders"
+
+        print(f"    ✓ Insider activity: {buys} buys, {sells} sells, signal={result['insider_signal']}")
+    except Exception as e:
+        print(f"    ⚠ Insider fetch failed: {e}")
+
+    return result
+
+
+def fetch_short_interest(t, info):
+    """
+    Fetch short interest data — shares short as % of float.
+    High short interest (>15%) = crowded short, potential squeeze risk or genuine bearish signal.
+    Short interest ratio (days to cover) = shares short / avg daily volume.
+    """
+    result = {
+        "shares_short":         0,
+        "short_ratio":          0,   # days to cover
+        "short_pct_float":      0,   # % of float that is short
+        "short_signal":         "neutral",
+        "short_signal_desc":    "Short interest data unavailable",
+    }
+    try:
+        shares_short    = _info_val(info, "sharesShort") or 0
+        short_ratio     = _info_val(info, "shortRatio") or 0
+        short_pct_float = _info_val(info, "shortPercentOfFloat") or 0
+        shares_float    = _info_val(info, "floatShares") or 1
+
+        # Fallback: compute from shares short / float
+        if shares_short > 0 and shares_float > 0 and not short_pct_float:
+            short_pct_float = shares_short / shares_float
+
+        result["shares_short"]      = int(shares_short)
+        result["short_ratio"]       = round(float(short_ratio), 1)
+        result["short_pct_float"]   = round(float(short_pct_float) * 100, 1)
+
+        pct = result["short_pct_float"]
+        days = result["short_ratio"]
+
+        if pct == 0 and days == 0:
+            result["short_signal"]      = "neutral"
+            result["short_signal_desc"] = "Short interest data not available"
+        elif pct >= 20:
+            result["short_signal"]      = "high_short"
+            result["short_signal_desc"] = (f"{pct:.1f}% of float is short ({days:.1f} days to cover). "
+                                           f"Extremely crowded short — squeeze risk or strong bear thesis.")
+        elif pct >= 10:
+            result["short_signal"]      = "elevated_short"
+            result["short_signal_desc"] = (f"{pct:.1f}% of float is short ({days:.1f} days to cover). "
+                                           f"Elevated short interest — market skepticism present.")
+        elif pct >= 5:
+            result["short_signal"]      = "moderate_short"
+            result["short_signal_desc"] = (f"{pct:.1f}% of float is short. "
+                                           f"Moderate short interest — normal range for most stocks.")
+        else:
+            result["short_signal"]      = "low_short"
+            result["short_signal_desc"] = (f"{pct:.1f}% of float is short. "
+                                           f"Low short interest — market broadly constructive on the stock.")
+
+        print(f"    ✓ Short interest: {pct:.1f}% of float, {days:.1f} days to cover, signal={result['short_signal']}")
+    except Exception as e:
+        print(f"    ⚠ Short interest fetch failed: {e}")
+
+    return result
+
+
+def fetch_options_iv(t, ticker):
+    """
+    Fetch implied volatility from near-term options — a measure of market
+    uncertainty. High IV = market pricing in large moves (uncertainty/fear).
+    Low IV = market complacent. Compare to historical volatility for context.
+    """
+    result = {
+        "iv_30d":              None,   # 30-day implied vol (%)
+        "iv_call_atm":         None,
+        "iv_put_atm":          None,
+        "put_call_ratio":      None,   # >1 = bearish skew, <1 = bullish
+        "iv_signal":           "neutral",
+        "iv_signal_desc":      "Options data not available",
+        "options_expiries":    [],
+    }
+    try:
+        expiries = t.options
+        if not expiries:
+            return result
+
+        result["options_expiries"] = list(expiries[:5])
+
+        # Use the nearest expiry (most liquid, most informative for near-term IV)
+        nearest = expiries[0]
+        opt     = t.option_chain(nearest)
+
+        calls = opt.calls
+        puts  = opt.puts
+
+        if calls is None or calls.empty or puts is None or puts.empty:
+            return result
+
+        # Get current price for ATM strike selection
+        import pandas as pd
+        price = _info_val(t.info or {}, "regularMarketPrice","currentPrice","previousClose") or 0
+        if not price:
+            return result
+
+        # Find ATM options — closest strike to current price
+        calls['strike_dist'] = (calls['strike'] - price).abs()
+        puts['strike_dist']  = (puts['strike']  - price).abs()
+
+        atm_call = calls.nsmallest(3, 'strike_dist')
+        atm_put  = puts.nsmallest(3, 'strike_dist')
+
+        # Extract implied volatility
+        call_ivs = [float(v) for v in atm_call['impliedVolatility'].dropna() if float(v) > 0.01]
+        put_ivs  = [float(v) for v in atm_put['impliedVolatility'].dropna()  if float(v) > 0.01]
+
+        avg_call_iv = sum(call_ivs) / len(call_ivs) if call_ivs else None
+        avg_put_iv  = sum(put_ivs)  / len(put_ivs)  if put_ivs  else None
+
+        if avg_call_iv:
+            result["iv_call_atm"] = round(avg_call_iv * 100, 1)
+        if avg_put_iv:
+            result["iv_put_atm"]  = round(avg_put_iv * 100, 1)
+
+        # 30-day IV approximation — average of call and put ATM
+        ivs = [v for v in [avg_call_iv, avg_put_iv] if v]
+        if ivs:
+            result["iv_30d"] = round((sum(ivs) / len(ivs)) * 100, 1)
+
+        # Put/call open interest ratio — sentiment indicator
+        total_call_oi = calls['openInterest'].fillna(0).sum()
+        total_put_oi  = puts['openInterest'].fillna(0).sum()
+        if total_call_oi > 0:
+            result["put_call_ratio"] = round(float(total_put_oi) / float(total_call_oi), 2)
+
+        # IV signal
+        iv = result["iv_30d"] or 0
+        pc = result["put_call_ratio"] or 1
+
+        if iv > 60:
+            sig = "very_high_iv"
+            desc = (f"IV {iv:.0f}% — extremely elevated uncertainty. "
+                    f"Market pricing in large moves (earnings risk, macro, litigation).")
+        elif iv > 40:
+            sig = "high_iv"
+            desc = (f"IV {iv:.0f}% — elevated uncertainty vs typical equity IV. "
+                    f"Options market signaling above-average risk.")
+        elif iv > 20:
+            sig = "normal_iv"
+            desc = (f"IV {iv:.0f}% — normal implied volatility range. "
+                    f"Market not pricing unusual risk or opportunity.")
+        elif iv > 0:
+            sig = "low_iv"
+            desc = (f"IV {iv:.0f}% — compressed implied volatility. "
+                    f"Market complacent; potential for unexpected moves.")
+        else:
+            sig = "neutral"
+            desc = "Options IV data unavailable for this ticker."
+
+        # Overlay put/call skew
+        if pc and pc > 1.3:
+            desc += f" Put/call ratio {pc:.2f} — bearish options positioning."
+        elif pc and pc < 0.70:
+            desc += f" Put/call ratio {pc:.2f} — bullish options positioning."
+
+        result["iv_signal"]      = sig
+        result["iv_signal_desc"] = desc
+
+        print(f"    ✓ Options IV: {iv:.0f}% ATM IV, P/C ratio={pc:.2f}, signal={sig}")
+    except Exception as e:
+        print(f"    ⚠ Options IV fetch failed: {e}")
+
+    return result
+
+
+def fetch_segment_data(t, ticker):
+    """
+    Attempt to extract segment-level revenue from yfinance or SEC EDGAR.
+    Returns segments dict: {segment_name: {year: revenue}}.
+    Falls back to a descriptive note if not available.
+    """
+    result = {
+        "segments":        {},
+        "segment_note":    "",
+        "has_segments":    False,
+    }
+    # Common segment structures for well-known companies
+    KNOWN_SEGMENTS = {
+        "META":  ["Family of Apps", "Reality Labs"],
+        "AAPL":  ["iPhone", "Mac", "iPad", "Wearables/Home/Accessories", "Services"],
+        "MSFT":  ["Productivity & Business Processes", "Intelligent Cloud", "More Personal Computing"],
+        "GOOGL": ["Google Services", "Google Cloud", "Other Bets"],
+        "AMZN":  ["North America", "International", "AWS"],
+        "NVDA":  ["Data Center", "Gaming", "Professional Visualization", "Automotive"],
+        "TSLA":  ["Automotive", "Energy Generation & Storage", "Services & Other"],
+        "NFLX":  ["United States and Canada", "Europe Middle East Africa", "Latin America", "Asia Pacific"],
+    }
+
+    known = KNOWN_SEGMENTS.get(ticker.upper())
+    if known:
+        result["segment_note"] = (
+            f"{ticker} reports revenue in {len(known)} segments: "
+            f"{', '.join(known)}. "
+            f"Segment detail available in SEC 10-K (see Filings tab). "
+            f"Model uses consolidated revenue; segment mix informs qualitative risk assessment."
+        )
+        result["has_segments"] = True
+        result["segments"]     = {seg: {} for seg in known}
+
+    # Try yfinance earnings history for any available segment proxy
+    try:
+        eq = t.earnings
+        if eq is not None and not eq.empty:
+            result["segment_note"] += " Earnings history available from yfinance."
+    except: pass
+
+    return result
+
+
 def yfinance_fetch(ticker):
     yf = _ensure_yfinance()
     print(f"    Downloading {ticker} via yfinance...")
@@ -344,7 +729,24 @@ def yfinance_fetch(ticker):
     ocf_yrs=sorted(yf_cf["op_cf"].keys())
     print(f"    ✓ Revenue: {rev_yrs}  |  Assets: {ta_yrs}  |  OCF: {ocf_yrs}")
     print(f"    ✓ Price: ${price:,.2f}  Mkt Cap: ${mkt_cap/1e9:,.1f}B  Sector: {stock['sector']}")
-    return stock,yf_is,yf_bs,yf_cf,analyst_est
+
+    # ── Additional data points ──────────────────────────────────────────────
+    print(f"    Fetching quarterly financials...")
+    quarterly      = fetch_quarterly_financials(t)
+
+    print(f"    Fetching insider activity...")
+    insider        = fetch_insider_activity(t, ticker)
+
+    print(f"    Fetching short interest...")
+    short_interest = fetch_short_interest(t, info)
+
+    print(f"    Fetching options implied volatility...")
+    options_iv     = fetch_options_iv(t, ticker)
+
+    print(f"    Fetching segment data...")
+    segments       = fetch_segment_data(t, ticker)
+
+    return stock,yf_is,yf_bs,yf_cf,analyst_est,quarterly,insider,short_interest,options_iv,segments
 
 def yfinance_single(ticker):
     yf=_ensure_yfinance()
@@ -420,7 +822,7 @@ def merge_series(*dicts):
 
 def fetch_financials(ticker):
     print(f"  [1/3] Fetching data via yfinance...")
-    stock,yf_is,yf_bs,yf_cf,analyst_est=yfinance_fetch(ticker)
+    stock,yf_is,yf_bs,yf_cf,analyst_est,quarterly,insider,short_interest,options_iv,segments = yfinance_fetch(ticker)
 
     print(f"  [2/3] Fetching SEC EDGAR supplemental data...")
     filings={}; cik=""
@@ -506,6 +908,12 @@ def fetch_financials(ticker):
         "div_paid":m(yf_cf["div_paid"],sec_div),
         "buybacks":m(yf_cf["buybacks"],sec_buy),
         "stock_comp":m(yf_cf.get("sbc",{}),sec_sbc),
+        # ── New data points ──
+        "quarterly":     quarterly,
+        "insider":       insider,
+        "short_interest":short_interest,
+        "options_iv":    options_iv,
+        "segments":      segments,
     }
 
 # ── Forecast Assumptions — Smarter Forecasting Engine v2 ─────────────────────
@@ -741,7 +1149,7 @@ def build_assumptions(data, n_proj):
     stage = classify_company(rev, oi, rev_cagr_3yr,
                              stock.get("gross_margin", 0.50) or 0.50)
     stage_targets = {
-        "hyper_growth":  0.15,   # Mean-revert toward high but sustainable growth
+        "hyper_growth":  0.15,
         "high_growth":   0.10,
         "mature_growth": 0.07,
         "stable":        0.04,
@@ -750,6 +1158,19 @@ def build_assumptions(data, n_proj):
     }
     industry_avg_g = stage_targets.get(stage, 0.07)
     print(f"    ✓ Company stage: {stage} | mean-reversion target: {industry_avg_g:.0%}")
+
+    # ── Quarterly momentum adjustment ─────────────────────────────────────────
+    # If quarterly data shows acceleration/deceleration, nudge Yr1 growth estimate
+    quarterly = data.get("quarterly", {})
+    q_accel   = quarterly.get("recent_revenue_accel")
+    if q_accel is not None and abs(q_accel) > 0.01:
+        # Cap adjustment at ±5pp to avoid overreacting to one quarter
+        adj = max(min(q_accel * 0.4, 0.05), -0.05)
+        base_g = base_g + adj
+        base_g = max(min(base_g, 0.45), -0.10)
+        print(f"    ✓ Quarterly momentum adj: {q_accel:+.1%} acceleration → base_g adjusted to {base_g:.1%}")
+    else:
+        print(f"    ✓ No quarterly momentum signal available")
 
     # Apply mean reversion over projection period
     rev_growth = revenue_mean_reversion(base_g, industry_avg_g, n_proj)

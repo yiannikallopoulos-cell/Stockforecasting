@@ -947,6 +947,31 @@ function renderResults(data) {
     </div>
   </div>
 
+  <!-- Quarterly Trends -->
+  ${buildQuarterlySection(summary)}
+
+  <!-- Smart Money Signals -->
+  <div class="section-rule fade-in-delay-5">
+    <span class="section-rule-label">Smart Money Signals</span>
+    <div class="section-rule-line"></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:24px" class="fade-in-delay-5">
+    ${buildInsiderCard(summary)}
+    ${buildShortInterestCard(summary)}
+    ${buildIVCard(summary)}
+  </div>
+
+  <!-- Segments -->
+  ${summary.has_segments ? `
+  <div class="section-rule fade-in-delay-5">
+    <span class="section-rule-label">Business Segments</span>
+    <div class="section-rule-line"></div>
+  </div>
+  <div style="padding:16px 20px;background:white;border:1px solid var(--rule);margin-bottom:24px;font-size:13px;line-height:1.7" class="fade-in-delay-5">
+    <div style="font-weight:600;margin-bottom:8px;color:var(--ink)">${summary.segment_names.join(' · ')}</div>
+    <div style="color:var(--muted);font-style:italic">${summary.segment_note}</div>
+  </div>` : ''}
+
   <!-- Peers -->
   ${Object.keys(peers).length > 0 ? `
   <div class="section-rule fade-in-delay-5">
@@ -967,6 +992,138 @@ function renderResults(data) {
   resultsEl.innerHTML = html;
   resultsEl.classList.add('active');
   resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function signalColor(signal) {
+  const map = {
+    bullish:'#1a6b2e', slightly_bullish:'#2d9e52',
+    bearish:'#a81e1e', slightly_bearish:'#c45e1a',
+    neutral:'#8a6d10',
+    high_short:'#a81e1e', elevated_short:'#c45e1a',
+    moderate_short:'#8a6d10', low_short:'#2d9e52',
+    very_high_iv:'#a81e1e', high_iv:'#c45e1a',
+    normal_iv:'#8a6d10', low_iv:'#2d9e52',
+  };
+  return map[signal] || '#595959';
+}
+
+function signalBg(signal) {
+  const map = {
+    bullish:'#e8f5ec', slightly_bullish:'#edf7f1',
+    bearish:'#fce8e8', slightly_bearish:'#fef0e6',
+    neutral:'#fdf6e3',
+    high_short:'#fce8e8', elevated_short:'#fef0e6',
+    moderate_short:'#fdf6e3', low_short:'#edf7f1',
+    very_high_iv:'#fce8e8', high_iv:'#fef0e6',
+    normal_iv:'#fdf6e3', low_iv:'#edf7f1',
+  };
+  return map[signal] || '#f5f5f5';
+}
+
+function buildInsiderCard(summary) {
+  const sig   = summary.insider_signal || 'neutral';
+  const desc  = summary.insider_signal_desc || 'No data';
+  const buys  = summary.insider_buy_count || 0;
+  const sells = summary.insider_sell_count || 0;
+  const txns  = summary.insider_transactions || [];
+  const color = signalColor(sig); const bg = signalBg(sig);
+
+  let txnRows = '';
+  txns.slice(0,3).forEach(t => {
+    const typeColor = t.type === 'BUY' ? '#1a6b2e' : '#a81e1e';
+    txnRows += `<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-bottom:1px solid var(--rule)">
+      <span style="color:${typeColor};font-weight:600">${t.type}</span>
+      <span style="color:var(--muted)">${t.name?.substring(0,18)}</span>
+      <span>${t.shares?.toLocaleString()}</span>
+    </div>`;
+  });
+
+  return `<div style="background:${bg};border:1px solid var(--rule);padding:18px 20px">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:${color};font-weight:600;margin-bottom:8px">Insider Activity</div>
+    <div style="font-family:'DM Serif Display',serif;font-size:20px;color:${color};margin-bottom:6px">${sig.replace(/_/g,' ').toUpperCase()}</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">${desc}</div>
+    <div style="font-size:11px;margin-bottom:8px"><span style="color:#1a6b2e;font-weight:600">${buys} buys</span> &nbsp;·&nbsp; <span style="color:#a81e1e;font-weight:600">${sells} sells</span> (last 6mo)</div>
+    ${txnRows ? `<div style="margin-top:8px">${txnRows}</div>` : ''}
+  </div>`;
+}
+
+function buildShortInterestCard(summary) {
+  const sig   = summary.short_signal || 'neutral';
+  const desc  = summary.short_signal_desc || 'No data';
+  const pct   = summary.short_pct_float || 0;
+  const days  = summary.short_ratio || 0;
+  const color = signalColor(sig); const bg = signalBg(sig);
+
+  // Mini bar showing short % vs 100%
+  const barW  = Math.min(pct, 40) / 40 * 100;
+  const barColor = pct > 20 ? '#a81e1e' : pct > 10 ? '#c45e1a' : pct > 5 ? '#8a6d10' : '#2d9e52';
+
+  return `<div style="background:${bg};border:1px solid var(--rule);padding:18px 20px">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:${color};font-weight:600;margin-bottom:8px">Short Interest</div>
+    <div style="font-family:'DM Serif Display',serif;font-size:32px;color:${color};line-height:1">${pct > 0 ? pct.toFixed(1)+'%' : '—'}</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">of float is short</div>
+    ${pct > 0 ? `<div style="height:6px;background:var(--rule);border-radius:3px;margin-bottom:8px">
+      <div style="height:100%;width:${barW}%;background:${barColor};border-radius:3px"></div>
+    </div>` : ''}
+    <div style="font-size:11px;color:var(--muted)">${days > 0 ? days.toFixed(1)+' days to cover' : ''}</div>
+    <div style="font-size:11px;color:${color};margin-top:6px;font-style:italic">${desc.substring(0,100)}</div>
+  </div>`;
+}
+
+function buildIVCard(summary) {
+  const sig  = summary.iv_signal || 'neutral';
+  const desc = summary.iv_signal_desc || 'No data';
+  const iv   = summary.iv_30d || 0;
+  const pc   = summary.put_call_ratio || 0;
+  const color= signalColor(sig); const bg = signalBg(sig);
+
+  return `<div style="background:${bg};border:1px solid var(--rule);padding:18px 20px">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:${color};font-weight:600;margin-bottom:8px">Options Implied Volatility</div>
+    <div style="font-family:'DM Serif Display',serif;font-size:32px;color:${color};line-height:1">${iv > 0 ? iv.toFixed(0)+'%' : '—'}</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">30-day ATM implied vol</div>
+    ${pc > 0 ? `<div style="font-size:13px;font-weight:600;margin-bottom:6px">P/C Ratio: ${pc.toFixed(2)} <span style="font-size:10px;font-weight:400;color:var(--muted)">${pc > 1.2 ? '(bearish skew)' : pc < 0.8 ? '(bullish skew)' : '(neutral)'}</span></div>` : ''}
+    <div style="font-size:11px;color:${color};font-style:italic">${desc.substring(0,120)}</div>
+  </div>`;
+}
+
+function buildQuarterlySection(summary) {
+  const qrev = summary.quarterly_revenue || {};
+  const qgm  = summary.quarterly_gross_margin || {};
+  const qom  = summary.quarterly_op_margin || {};
+  const accel= summary.recent_rev_accel;
+
+  const qKeys = Object.keys(qrev).sort().slice(-6);
+  if (qKeys.length < 2) return '';
+
+  const maxRev = Math.max(...qKeys.map(k => qrev[k] || 0));
+
+  let bars = '';
+  qKeys.forEach(k => {
+    const rv = qrev[k] || 0;
+    const gm = qgm[k];
+    const h  = maxRev > 0 ? Math.round((rv/maxRev)*100) : 0;
+    const label = k.length > 7 ? k.substring(2,7) : k;
+    bars += `<div class="bar-group">
+      <div class="bar-val" style="font-size:9px">${fmt(rv,1,'$','B')}</div>
+      <div class="bar-track"><div class="bar hist" style="height:${h}%"></div></div>
+      <div class="bar-label">${label}</div>
+      ${gm !== undefined ? `<div class="bar-label" style="color:var(--gold)">${fmt(gm,1,'','%')}</div>` : ''}
+    </div>`;
+  });
+
+  const accelText = accel !== 0 && accel !== null && accel !== undefined
+    ? `<span style="font-size:11px;padding:3px 10px;background:${accel>0?'#e8f5ec':'#fce8e8'};color:${accel>0?'#1a6b2e':'#a81e1e'};font-weight:600;margin-left:12px">${accel>0?'▲ Accelerating':'▼ Decelerating'} ${Math.abs(accel*100).toFixed(1)}pp QoQ</span>`
+    : '';
+
+  return `
+  <div class="section-rule fade-in-delay-4">
+    <span class="section-rule-label">Quarterly Revenue Trend${accelText}</span>
+    <div class="section-rule-line"></div>
+    <span class="section-rule-label" style="color:var(--gold)">Gold % = Gross Margin</span>
+  </div>
+  <div class="chart-wrap fade-in-delay-4">
+    <div class="bar-chart">${bars}</div>
+  </div>`;
 }
 
 async function runAnalysis() {

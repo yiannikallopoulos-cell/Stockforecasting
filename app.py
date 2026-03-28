@@ -329,6 +329,31 @@ def compute_summary(data, assumptions):
         "hist_years":[yr for yr,_ in rev_list],
         "hist_revenue":[round(safe_float(v)/1e9,2) for _,v in rev_list],
         "proj_rev_growth":[round(safe_float(gv)*100,1) for gv in assumptions.get("rev_growth",[])],
+        # ── Quarterly signals ──
+        "quarterly_revenue":{k:round(safe_float(v)/1e9,2) for k,v in (data.get("quarterly",{}).get("quarterly_revenue",{}) or {}).items()},
+        "quarterly_gross_margin":{k:round(safe_float(v)*100,1) for k,v in (data.get("quarterly",{}).get("quarterly_gross_margin",{}) or {}).items()},
+        "quarterly_op_margin":{k:round(safe_float(v)*100,1) for k,v in (data.get("quarterly",{}).get("quarterly_op_margin",{}) or {}).items()},
+        "recent_rev_accel":round(safe_float(data.get("quarterly",{}).get("recent_revenue_accel")),2),
+        # ── Insider activity ──
+        "insider_signal":      data.get("insider",{}).get("insider_signal","neutral"),
+        "insider_signal_desc": data.get("insider",{}).get("insider_signal_desc",""),
+        "insider_buy_count":   int(data.get("insider",{}).get("insider_buy_count",0) or 0),
+        "insider_sell_count":  int(data.get("insider",{}).get("insider_sell_count",0) or 0),
+        "insider_transactions":data.get("insider",{}).get("insider_transactions",[])[:5],
+        # ── Short interest ──
+        "short_pct_float":  safe_float(data.get("short_interest",{}).get("short_pct_float")),
+        "short_ratio":      safe_float(data.get("short_interest",{}).get("short_ratio")),
+        "short_signal":     data.get("short_interest",{}).get("short_signal","neutral"),
+        "short_signal_desc":data.get("short_interest",{}).get("short_signal_desc",""),
+        # ── Options IV ──
+        "iv_30d":         safe_float(data.get("options_iv",{}).get("iv_30d")),
+        "put_call_ratio": safe_float(data.get("options_iv",{}).get("put_call_ratio")),
+        "iv_signal":      data.get("options_iv",{}).get("iv_signal","neutral"),
+        "iv_signal_desc": data.get("options_iv",{}).get("iv_signal_desc",""),
+        # ── Segments ──
+        "segment_note":  data.get("segments",{}).get("segment_note",""),
+        "has_segments":  data.get("segments",{}).get("has_segments",False),
+        "segment_names": list((data.get("segments",{}).get("segments",{}) or {}).keys()),
     }
 
 
