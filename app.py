@@ -21,13 +21,9 @@ log.info(f"Python {sys.version}")
 log.info(f"CWD: {os.getcwd()}")
 log.info(f"Dir: {os.listdir('.')}")
 
-from flask import Flask, request, jsonify, send_file, render_template
+from flask import Flask, request, jsonify, send_file, Response
 
-BASE_DIR     = Path(__file__).resolve().parent
-TEMPLATE_DIR = BASE_DIR / "templates"
-log.info(f"Templates: {TEMPLATE_DIR} exists={TEMPLATE_DIR.exists()}")
-
-app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
+app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024
 app.config["JSON_SORT_KEYS"]     = False
 
@@ -228,9 +224,12 @@ def compute_summary(data, assumptions):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+# HTML embedded directly — no templates folder needed
+INDEX_HTML = open(__file__.replace("app.py","index.html"), encoding="utf-8").read()
+
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return Response(INDEX_HTML, mimetype="text/html")
 
 
 @app.route("/api/analyze", methods=["POST"])
