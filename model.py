@@ -166,37 +166,18 @@ def _df_series(df,*names):
     return {}
 
 def _yf_session():
-    """Return a requests session that avoids Yahoo 429 rate limiting."""
-    import requests as req
-    import random
-    session = req.Session()
-    agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/119.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    ]
-    session.headers.update({
-        "User-Agent": random.choice(agents),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-    })
-    return session
+    """Placeholder - yfinance 1.2+ manages its own session internally."""
+    return None
 
 
 def yfinance_fetch(ticker):
     yf = _ensure_yfinance()
     print(f"    Downloading {ticker} via yfinance...")
 
-    # Use a custom session to avoid 429 rate limiting on shared IPs
-    session = _yf_session()
-    t = yf.Ticker(ticker, session=session)
+    # yfinance 1.2+ manages its own curl_cffi session — do NOT pass a session
+    t = yf.Ticker(ticker)
 
-    # Retry info fetch up to 3 times with backoff
+    # Fetch info with retries
     info = {}
     for attempt in range(3):
         try:
@@ -209,13 +190,14 @@ def yfinance_fetch(ticker):
         if attempt < 2:
             time.sleep(2 + attempt * 2)
 
-    # If info still empty, try fast_info as fallback
+    # fast_info fallback if info empty
     if not info or len(info) < 5:
         try:
             fi = t.fast_info
             info = {
                 "currentPrice":      getattr(fi,"last_price",None),
                 "regularMarketPrice":getattr(fi,"last_price",None),
+                "previousClose":     getattr(fi,"previous_close",None),
                 "marketCap":         getattr(fi,"market_cap",None),
                 "sharesOutstanding": getattr(fi,"shares",None),
                 "currency":          getattr(fi,"currency","USD"),
@@ -226,24 +208,18 @@ def yfinance_fetch(ticker):
         except Exception as e:
             print(f"    fast_info also failed: {e}")
 
-    # Financial statements — retry each with delay
+    # Financial statements
     is_df = bs_df = cf_df = None
     for attempt in range(2):
         try:
-            if is_df is None:
-                is_df = t.income_stmt
-        except Exception:
-            pass
+            if is_df is None:   is_df = t.income_stmt
+        except Exception: pass
         try:
-            if bs_df is None:
-                bs_df = t.balance_sheet
-        except Exception:
-            pass
+            if bs_df is None:   bs_df = t.balance_sheet
+        except Exception: pass
         try:
-            if cf_df is None:
-                cf_df = t.cashflow
-        except Exception:
-            pass
+            if cf_df is None:   cf_df = t.cashflow
+        except Exception: pass
         if is_df is not None and bs_df is not None and cf_df is not None:
             break
         if attempt == 0:
@@ -373,8 +349,7 @@ def yfinance_fetch(ticker):
 def yfinance_single(ticker):
     yf=_ensure_yfinance()
     try:
-        session=_yf_session()
-        t=yf.Ticker(ticker, session=session)
+        t=yf.Ticker(ticker)
         info={}
         for attempt in range(2):
             try:

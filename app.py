@@ -90,22 +90,25 @@ def test():
     except Exception as e:
         results["network_sec"] = f"FAILED: {e}"
 
-    # 4. Check yfinance can fetch a ticker (with session to avoid 429)
+    # 4. Check yfinance — yfinance 1.2+ manages its own session, do NOT pass one
     try:
         import yfinance as yf
-        import random
-        session = __import__("requests").Session()
-        session.headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15"
-        t    = yf.Ticker("AAPL", session=session)
+        t    = yf.Ticker("AAPL")
         info = {}
         for attempt in range(3):
             try:
                 raw = t.info
                 if raw and len(raw) > 5: info = raw; break
-            except: pass
+            except Exception as e:
+                results[f"yfinance_attempt_{attempt+1}"] = str(e)
             __import__("time").sleep(2)
-        px = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose")
-        results["yfinance_AAPL"] = f"OK price={px}" if px else f"WARNING: got info but no price. Keys={list(info.keys())[:8]}"
+        if not info:
+            fi = t.fast_info
+            px = getattr(fi,"last_price",None) or getattr(fi,"previous_close",None)
+            results["yfinance_AAPL"] = f"OK via fast_info price={px}"
+        else:
+            px = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+            results["yfinance_AAPL"] = f"OK price={px}"
     except Exception as e:
         results["yfinance_AAPL"] = f"FAILED: {e}"
 
