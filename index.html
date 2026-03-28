@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Equilens — Stock Analysis</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:       #0D1117;
+    --paper:     #F5F0E8;
+    --cream:     #EDE8DC;
+    --rule:      #D4C9B0;
+    --gold:      #B8943A;
+    --gold-lt:   #E8D48A;
+    --muted:     #6B6352;
+    --strong-buy:  #1a6b2e;
+    --buy:         #2d9e52;
+    --hold:        #8a6d10;
+    --sell:        #c45e1a;
+    --strong-sell: #a81e1e;
+    --strong-buy-bg:  #e8f5ec;
+    --buy-bg:         #edf7f1;
+    --hold-bg:        #fdf6e3;
+    --sell-bg:        #fef0e6;
+    --strong-sell-bg: #fce8e8;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+  }
+
+  /* ── Masthead ── */
+  .masthead {
+    border-bottom: 3px double var(--ink);
+    padding: 18px 48px 14px;
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    background: var(--paper);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .masthead-logo {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    letter-spacing: -0.5px;
+    color: var(--ink);
+  }
+  .masthead-logo span { color: var(--gold); }
+  .masthead-tagline {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border-left: 1px solid var(--rule);
+    padding-left: 20px;
+  }
+
+  /* ── Hero search ── */
+  .hero {
+    max-width: 760px;
+    margin: 64px auto 0;
+    padding: 0 24px;
+    text-align: center;
+  }
+  .hero-headline {
+    font-family: 'DM Serif Display', serif;
+    font-size: 52px;
+    line-height: 1.1;
+    letter-spacing: -1.5px;
+    margin-bottom: 12px;
+  }
+  .hero-headline em {
+    font-style: italic;
+    color: var(--gold);
+  }
+  .hero-sub {
+    color: var(--muted);
+    font-size: 16px;
+    margin-bottom: 40px;
+    font-weight: 300;
+  }
+
+  /* ── Search form ── */
+  .search-form {
+    display: flex;
+    gap: 0;
+    max-width: 520px;
+    margin: 0 auto;
+    border: 2px solid var(--ink);
+    background: #fff;
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+  .search-form input {
+    flex: 1;
+    padding: 16px 20px;
+    font-size: 18px;
+    font-family: 'DM Serif Display', serif;
+    border: none;
+    outline: none;
+    background: transparent;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+  .search-form input::placeholder {
+    color: #ccc;
+    font-style: italic;
+    letter-spacing: 1px;
+    text-transform: none;
+  }
+  .year-select {
+    border: none;
+    border-left: 2px solid var(--ink);
+    padding: 16px 14px;
+    font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    background: var(--cream);
+    color: var(--ink);
+    cursor: pointer;
+    outline: none;
+    font-weight: 500;
+  }
+  .search-btn {
+    padding: 16px 28px;
+    background: var(--ink);
+    color: var(--paper);
+    border: none;
+    font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .search-btn:hover { background: #2a3441; }
+  .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── Loading state ── */
+  .loading-bar {
+    display: none;
+    max-width: 520px;
+    margin: 16px auto 0;
+    height: 3px;
+    background: var(--cream);
+    border: 1px solid var(--rule);
+    overflow: hidden;
+  }
+  .loading-bar.active { display: block; }
+  .loading-progress {
+    height: 100%;
+    background: var(--gold);
+    width: 0%;
+    transition: width 0.4s ease;
+  }
+  .loading-msg {
+    display: none;
+    text-align: center;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--muted);
+    font-style: italic;
+  }
+  .loading-msg.active { display: block; }
+
+  /* ── Error ── */
+  .error-box {
+    display: none;
+    max-width: 520px;
+    margin: 16px auto 0;
+    padding: 14px 18px;
+    background: #fff0f0;
+    border: 1px solid #e08080;
+    font-size: 13px;
+    color: #8b0000;
+  }
+  .error-box.active { display: block; }
+
+  /* ── Results ── */
+  #results {
+    display: none;
+    max-width: 1100px;
+    margin: 48px auto 80px;
+    padding: 0 24px;
+  }
+  #results.active { display: block; }
+
+  /* ── Section rule ── */
+  .section-rule {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 36px 0 20px;
+  }
+  .section-rule-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .section-rule-line {
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+
+  /* ── Company header card ── */
+  .company-header {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 24px;
+    padding: 28px 32px;
+    background: white;
+    border: 2px solid var(--ink);
+    box-shadow: 5px 5px 0 var(--rule);
+    margin-bottom: 24px;
+  }
+  .company-name {
+    font-family: 'DM Serif Display', serif;
+    font-size: 34px;
+    letter-spacing: -1px;
+    line-height: 1;
+  }
+  .company-meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .company-desc {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+    max-width: 640px;
+  }
+  .price-display {
+    text-align: right;
+  }
+  .price-current {
+    font-family: 'DM Serif Display', serif;
+    font-size: 42px;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .price-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 4px;
+  }
+  .price-range {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+
+  /* ── Rating card ── */
+  .rating-card {
+    padding: 36px 40px;
+    border: 3px solid var(--ink);
+    box-shadow: 8px 8px 0 var(--ink);
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 24px;
+  }
+  .rating-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 6px;
+  }
+  .rating-stamp {
+    display: inline-flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .rating-badge {
+    font-family: 'DM Serif Display', serif;
+    font-size: 36px;
+    letter-spacing: -0.5px;
+    padding: 8px 24px;
+    border: 3px solid currentColor;
+    line-height: 1;
+  }
+  .rating-stars {
+    font-size: 22px;
+    letter-spacing: 4px;
+  }
+  .rating-desc {
+    font-size: 14px;
+    font-style: italic;
+    color: var(--muted);
+    margin-bottom: 24px;
+  }
+  .dcf-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-top: 20px;
+  }
+  .dcf-cell {
+    background: white;
+    padding: 18px 20px;
+  }
+  .dcf-cell-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+  .dcf-cell-value {
+    font-family: 'DM Serif Display', serif;
+    font-size: 26px;
+    line-height: 1;
+  }
+  .dcf-cell-sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .upside-positive { color: var(--strong-buy); }
+  .upside-negative { color: var(--strong-sell); }
+  .upside-neutral  { color: var(--hold); }
+
+  /* ── Gauge visual ── */
+  .gauge-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 20px;
+    padding: 16px 20px;
+    background: var(--cream);
+    border: 1px solid var(--rule);
+  }
+  .gauge-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap; }
+  .gauge-track {
+    flex: 1;
+    height: 12px;
+    background: linear-gradient(to right, #a81e1e 0%, #c45e1a 25%, #8a6d10 45%, #8a6d10 55%, #2d9e52 75%, #1a6b2e 100%);
+    border-radius: 2px;
+    position: relative;
+  }
+  .gauge-needle {
+    position: absolute;
+    top: -4px;
+    width: 4px;
+    height: 20px;
+    background: var(--ink);
+    border-radius: 2px;
+    transform: translateX(-50%);
+    transition: left 1s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .gauge-pct { font-size: 13px; font-weight: 600; white-space: nowrap; }
+
+  /* ── Metrics grid ── */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-bottom: 24px;
+  }
+  .metric-cell {
+    background: white;
+    padding: 16px 20px;
+  }
+  .metric-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 5px;
+    font-weight: 500;
+  }
+  .metric-value {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+  }
+
+  /* ── FCF schedule table ── */
+  .fcf-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .fcf-table th {
+    text-align: right;
+    padding: 8px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 2px solid var(--ink);
+    background: var(--cream);
+  }
+  .fcf-table th:first-child { text-align: left; }
+  .fcf-table td {
+    text-align: right;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-variant-numeric: tabular-nums;
+  }
+  .fcf-table td:first-child { text-align: left; font-weight: 500; }
+  .fcf-table tr:last-child td { border-bottom: none; font-weight: 600; background: var(--cream); }
+
+  /* ── Peers table ── */
+  .peers-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .peers-table th {
+    text-align: right;
+    padding: 8px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 2px solid var(--ink);
+    background: var(--cream);
+  }
+  .peers-table th:first-child { text-align: left; }
+  .peers-table td {
+    text-align: right;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-variant-numeric: tabular-nums;
+  }
+  .peers-table td:first-child { text-align: left; font-weight: 600; }
+  .peers-table tr.subject td { background: var(--cream); font-weight: 700; }
+  .peers-table tr:last-child td { border-bottom: none; }
+
+  /* ── Download strip ── */
+  .download-strip {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 22px 32px;
+    background: var(--ink);
+    color: var(--paper);
+    border: 2px solid var(--ink);
+    margin-bottom: 24px;
+  }
+  .download-strip-text h3 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    margin-bottom: 3px;
+  }
+  .download-strip-text p {
+    font-size: 12px;
+    color: #aaa;
+  }
+  .download-btn {
+    margin-left: auto;
+    padding: 13px 28px;
+    background: var(--gold);
+    color: var(--ink);
+    border: none;
+    font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .download-btn:hover { background: var(--gold-lt); }
+
+  /* ── Revenue chart ── */
+  .chart-wrap {
+    background: white;
+    border: 1px solid var(--rule);
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .chart-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  .bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 120px; }
+  .bar-group { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .bar-track { flex: 1; display: flex; align-items: flex-end; width: 100%; }
+  .bar {
+    width: 100%;
+    transition: height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+    min-height: 4px;
+  }
+  .bar.hist { background: var(--ink); }
+  .bar.proj { background: var(--gold); opacity: 0.7; }
+  .bar-label { font-size: 10px; color: var(--muted); text-align: center; white-space: nowrap; }
+  .bar-val   { font-size: 10px; font-weight: 600; text-align: center; }
+
+  /* ── Analyst strip ── */
+  .analyst-strip {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 16px 24px;
+    background: var(--cream);
+    border: 1px solid var(--rule);
+    margin-bottom: 24px;
+    font-size: 13px;
+  }
+  .analyst-rec {
+    font-family: 'DM Serif Display', serif;
+    font-size: 18px;
+    font-weight: bold;
+  }
+  .analyst-divider { width: 1px; height: 32px; background: var(--rule); }
+
+  /* ── Responsive ── */
+  @media (max-width: 720px) {
+    .hero-headline { font-size: 36px; }
+    .dcf-grid { grid-template-columns: repeat(2, 1fr); }
+    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+    .company-header { grid-template-columns: 1fr; }
+    .masthead { padding: 14px 20px; }
+  }
+
+  /* ── Animations ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in { animation: fadeUp 0.5s ease forwards; }
+  .fade-in-delay-1 { animation: fadeUp 0.5s 0.1s ease both; }
+  .fade-in-delay-2 { animation: fadeUp 0.5s 0.2s ease both; }
+  .fade-in-delay-3 { animation: fadeUp 0.5s 0.3s ease both; }
+  .fade-in-delay-4 { animation: fadeUp 0.5s 0.4s ease both; }
+  .fade-in-delay-5 { animation: fadeUp 0.5s 0.5s ease both; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-logo">Equi<span>lens</span></div>
+  <div class="masthead-tagline">Fundamental Analysis Engine</div>
+</header>
+
+<main>
+  <section class="hero">
+    <h1 class="hero-headline">What is this stock<br><em>actually worth?</em></h1>
+    <p class="hero-sub">Enter any ticker for a full DCF model, valuation rating, and downloadable Excel analysis.</p>
+
+    <div class="search-form">
+      <input type="text" id="ticker-input" placeholder="e.g. META, AAPL, NVDA" maxlength="10" autocomplete="off">
+      <select class="year-select" id="years-select">
+        <option value="3">3 Yr</option>
+        <option value="4">4 Yr</option>
+        <option value="5" selected>5 Yr</option>
+      </select>
+      <button class="search-btn" id="search-btn" onclick="runAnalysis()">Analyze ↗</button>
+    </div>
+
+    <div class="loading-bar" id="loading-bar"><div class="loading-progress" id="loading-progress"></div></div>
+    <div class="loading-msg" id="loading-msg">Fetching financials from Yahoo Finance & SEC EDGAR…</div>
+    <div class="error-box" id="error-box"></div>
+  </section>
+
+  <section id="results">
+    <!-- Injected by JS -->
+  </section>
+</main>
+
+<script>
+let currentFilename = null;
+
+const LOAD_MESSAGES = [
+  "Fetching financials from Yahoo Finance & SEC EDGAR…",
+  "Pulling income statement, balance sheet & cash flow…",
+  "Fetching peer comparison data…",
+  "Building DCF model and projections…",
+  "Generating Excel workbook…",
+  "Almost done…",
+];
+
+function fmt(n, decimals=1, prefix='', suffix='') {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  return prefix + n.toFixed(decimals) + suffix;
+}
+
+function fmtPct(n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  const sign = n >= 0 ? '+' : '';
+  return sign + n.toFixed(1) + '%';
+}
+
+function ratingStyles(rating) {
+  const map = {
+    'STRONG BUY':  { color: 'var(--strong-buy)',  bg: 'var(--strong-buy-bg)',  stars: '★★★★★' },
+    'BUY':         { color: 'var(--buy)',          bg: 'var(--buy-bg)',         stars: '★★★★☆' },
+    'HOLD':        { color: 'var(--hold)',          bg: 'var(--hold-bg)',        stars: '★★★☆☆' },
+    'SELL':        { color: 'var(--sell)',          bg: 'var(--sell-bg)',        stars: '★★☆☆☆' },
+    'STRONG SELL': { color: 'var(--strong-sell)',  bg: 'var(--strong-sell-bg)', stars: '★☆☆☆☆' },
+  };
+  return map[rating] || { color: '#555', bg: '#f5f5f5', stars: '★★★☆☆' };
+}
+
+function gaugePosition(upsidePct) {
+  // Map upside% to gauge position 0-100
+  // -40% → 0, 0% → 50, +40% → 100
+  const clamped = Math.max(-40, Math.min(40, upsidePct));
+  return ((clamped + 40) / 80) * 100;
+}
+
+function buildBarChart(histYears, histRevenue, projGrowth) {
+  const maxRev = Math.max(...histRevenue);
+  const lastRev = histRevenue[histRevenue.length - 1] || 1;
+  let bars = '';
+  // Historical
+  histYears.forEach((yr, i) => {
+    const h = Math.round((histRevenue[i] / maxRev) * 100);
+    bars += `<div class="bar-group">
+      <div class="bar-val">${fmt(histRevenue[i], 1, '$', 'B')}</div>
+      <div class="bar-track"><div class="bar hist" style="height:${h}%"></div></div>
+      <div class="bar-label">${yr}</div>
+    </div>`;
+  });
+  // Projected
+  let curRev = lastRev;
+  projGrowth.forEach((g, i) => {
+    curRev = curRev * (1 + g / 100);
+    const projMax = Math.max(maxRev, curRev);
+    const h = Math.round((curRev / projMax) * 100);
+    const yr = parseInt(histYears[histYears.length - 1]) + i + 1;
+    bars += `<div class="bar-group">
+      <div class="bar-val" style="color:var(--gold)">${fmt(curRev, 1, '$', 'B')}</div>
+      <div class="bar-track"><div class="bar proj" style="height:${h}%"></div></div>
+      <div class="bar-label" style="color:var(--gold)">${yr}E</div>
+    </div>`;
+  });
+  return bars;
+}
+
+function buildFCFTable(fcfSchedule, ticker) {
+  const rows = fcfSchedule.map(row => `
+    <tr>
+      <td>${ticker} ${row.year > 0 ? 'Year ' + row.year : ''}</td>
+      <td>${fmt(row.fcf, 0, '$', 'mm')}</td>
+      <td>${fmt(row.pv, 0, '$', 'mm')}</td>
+    </tr>`).join('');
+  return `<table class="fcf-table">
+    <thead>
+      <tr>
+        <th style="text-align:left">Period</th>
+        <th>FCF ($mm)</th>
+        <th>PV of FCF ($mm)</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function buildPeersTable(subjectTicker, summary, peers) {
+  const subjRow = `<tr class="subject">
+    <td>${subjectTicker}</td>
+    <td>${fmt(summary.price, 2, '$')}</td>
+    <td>${summary.pe_forward > 0 ? fmt(summary.pe_forward, 1, '', 'x') : '—'}</td>
+    <td>${summary.ev_ebitda > 0 ? fmt(summary.ev_ebitda, 1, '', 'x') : '—'}</td>
+    <td>${fmt(summary.gross_margin, 1, '', '%')}</td>
+    <td>${fmt(summary.op_margin, 1, '', '%')}</td>
+    <td>${fmt(summary.rev_cagr, 1, '', '%')} (3yr)</td>
+  </tr>`;
+  const peerRows = Object.entries(peers).map(([t, p]) => `<tr>
+    <td>${t}</td>
+    <td>${fmt(p.price, 2, '$')}</td>
+    <td>${p.pe_forward > 0 ? fmt(p.pe_forward, 1, '', 'x') : '—'}</td>
+    <td>${p.ev_ebitda > 0 ? fmt(p.ev_ebitda, 1, '', 'x') : '—'}</td>
+    <td>${fmt(p.gross_margin, 1, '', '%')}</td>
+    <td>${fmt(p.op_margin, 1, '', '%')}</td>
+    <td>${fmt(p.revenue_growth, 1, '', '%')}</td>
+  </tr>`).join('');
+
+  return `<table class="peers-table">
+    <thead>
+      <tr>
+        <th style="text-align:left">Ticker</th>
+        <th>Price</th>
+        <th>P/E Fwd</th>
+        <th>EV/EBITDA</th>
+        <th>Gross Mgn</th>
+        <th>Op. Mgn</th>
+        <th>Rev Growth</th>
+      </tr>
+    </thead>
+    <tbody>${subjRow}${peerRows}</tbody>
+  </table>`;
+}
+
+function renderResults(data) {
+  const { ticker, filename, summary, dcf, peers } = data;
+  currentFilename = filename;
+  const rs = ratingStyles(dcf.rating);
+  const upsideClass = dcf.upside_pct >= 5 ? 'upside-positive' :
+                      dcf.upside_pct <= -5 ? 'upside-negative' : 'upside-neutral';
+  const needlePos = gaugePosition(dcf.upside_pct);
+  const analystRec = summary.analyst_rec && summary.analyst_rec !== 'N/A' ? summary.analyst_rec : null;
+
+  const html = `
+  <!-- Download strip -->
+  <div class="download-strip fade-in">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/>
+      <polyline points="9 14 12 17 15 14"/>
+    </svg>
+    <div class="download-strip-text">
+      <h3>${ticker} Operating Model — Excel Workbook</h3>
+      <p>Full DCF model · Income statement · Balance sheet · Cash flow · Valuation · Peer comps · 6 sheets</p>
+    </div>
+    <a href="/api/download/${filename}" class="download-btn" download>Download Excel ↓</a>
+  </div>
+
+  <!-- Company header -->
+  <div class="company-header fade-in-delay-1">
+    <div>
+      <div class="company-name">${summary.name}</div>
+      <div class="company-meta">${ticker} &nbsp;·&nbsp; ${summary.sector} &nbsp;·&nbsp; ${summary.industry}</div>
+      ${summary.description ? `<div class="company-desc">${summary.description}…</div>` : ''}
+    </div>
+    <div class="price-display">
+      <div class="price-current">$${fmt(summary.price, 2)}</div>
+      <div class="price-label">Current Price</div>
+      <div class="price-range">52W: $${fmt(summary.week52_low, 2)} – $${fmt(summary.week52_high, 2)}</div>
+    </div>
+  </div>
+
+  <!-- Rating card -->
+  <div class="rating-card fade-in-delay-2" style="background:${rs.bg}; --rating-color:${rs.color};">
+    <div style="position:absolute;top:0;left:0;right:0;height:6px;background:${rs.color}"></div>
+    <div class="rating-stamp">
+      <div class="rating-badge" style="color:${rs.color}">${dcf.rating}</div>
+      <div class="rating-stars" style="color:${rs.color}">${rs.stars}</div>
+    </div>
+    <div class="rating-desc">${dcf.rating_desc}</div>
+
+    <div class="dcf-grid">
+      <div class="dcf-cell">
+        <div class="dcf-cell-label">DCF Implied Price</div>
+        <div class="dcf-cell-value">$${fmt(dcf.dcf_price, 2)}</div>
+        <div class="dcf-cell-sub">Based on ${dcf.n_proj}-yr FCF model</div>
+      </div>
+      <div class="dcf-cell">
+        <div class="dcf-cell-label">Current Price</div>
+        <div class="dcf-cell-value">$${fmt(dcf.current_price, 2)}</div>
+        <div class="dcf-cell-sub">Live market price</div>
+      </div>
+      <div class="dcf-cell">
+        <div class="dcf-cell-label">Implied Upside</div>
+        <div class="dcf-cell-value ${upsideClass}">${fmtPct(dcf.upside_pct)}</div>
+        <div class="dcf-cell-sub">DCF vs market</div>
+      </div>
+      <div class="dcf-cell">
+        <div class="dcf-cell-label">Cost of Equity</div>
+        <div class="dcf-cell-value">${fmt(dcf.coe_pct, 1, '', '%')}</div>
+        <div class="dcf-cell-sub">CAPM, g=${fmt(dcf.terminal_growth_pct, 1, '', '%')}</div>
+      </div>
+    </div>
+
+    <div class="gauge-wrap">
+      <span class="gauge-label">Strong Sell</span>
+      <div class="gauge-track">
+        <div class="gauge-needle" id="gauge-needle" style="left:${needlePos}%"></div>
+      </div>
+      <span class="gauge-label">Strong Buy</span>
+      <span class="gauge-pct ${upsideClass}">${fmtPct(dcf.upside_pct)}</span>
+    </div>
+
+    <div style="margin-top:16px;font-size:12px;color:var(--muted);line-height:1.6;font-style:italic;">
+      Model assumptions: ${dcf.n_proj}-year explicit forecast · Terminal growth ${fmt(dcf.terminal_growth_pct, 1)}% ·
+      Cost of equity ${fmt(dcf.coe_pct, 2)}% · PV of FCFs $${fmt(dcf.pv_fcfs, 0)}mm ·
+      PV of terminal value $${fmt(dcf.pv_tv, 0)}mm · Equity value $${fmt(dcf.equity_value, 0)}mm.
+      Rating thresholds: Strong Buy ≥+30%, Buy +10–30%, Hold ±10%, Sell -10–25%, Strong Sell >-25%.
+    </div>
+  </div>
+
+  <!-- Key metrics -->
+  <div class="section-rule fade-in-delay-3">
+    <span class="section-rule-label">Key Metrics</span>
+    <div class="section-rule-line"></div>
+  </div>
+  <div class="metrics-grid fade-in-delay-3">
+    <div class="metric-cell"><div class="metric-label">Market Cap</div><div class="metric-value">$${fmt(summary.market_cap_b, 1)}B</div></div>
+    <div class="metric-cell"><div class="metric-label">Enterprise Value</div><div class="metric-value">$${fmt(summary.ev_b, 1)}B</div></div>
+    <div class="metric-cell"><div class="metric-label">P/E Forward</div><div class="metric-value">${summary.pe_forward > 0 ? fmt(summary.pe_forward, 1, '', 'x') : '—'}</div></div>
+    <div class="metric-cell"><div class="metric-label">EV / EBITDA</div><div class="metric-value">${summary.ev_ebitda > 0 ? fmt(summary.ev_ebitda, 1, '', 'x') : '—'}</div></div>
+    <div class="metric-cell"><div class="metric-label">Gross Margin</div><div class="metric-value">${fmt(summary.gross_margin, 1, '', '%')}</div></div>
+    <div class="metric-cell"><div class="metric-label">Operating Margin</div><div class="metric-value">${fmt(summary.op_margin, 1, '', '%')}</div></div>
+    <div class="metric-cell"><div class="metric-label">Revenue (LTM)</div><div class="metric-value">$${fmt(summary.last_rev_b, 1)}B</div></div>
+    <div class="metric-cell"><div class="metric-label">FCF (LTM)</div><div class="metric-value">$${fmt(summary.last_fcf_b, 1)}B</div></div>
+    <div class="metric-cell"><div class="metric-label">3yr Rev CAGR</div><div class="metric-value">${fmt(summary.rev_cagr, 1, '', '%')}</div></div>
+    <div class="metric-cell"><div class="metric-label">Beta</div><div class="metric-value">${fmt(summary.beta, 2)}</div></div>
+    <div class="metric-cell"><div class="metric-label">Analyst Target</div><div class="metric-value">$${fmt(summary.target_price, 2)}</div></div>
+    <div class="metric-cell">
+      <div class="metric-label">Analyst Consensus</div>
+      <div class="metric-value" style="font-size:16px">${analystRec || '—'} <span style="font-size:12px;color:var(--muted)">(${summary.analyst_count} analysts)</span></div>
+    </div>
+  </div>
+
+  <!-- Revenue chart -->
+  <div class="section-rule fade-in-delay-3">
+    <span class="section-rule-label">Revenue History &amp; Projections ($B)</span>
+    <div class="section-rule-line"></div>
+    <span class="section-rule-label" style="color:var(--gold)">■ Projected</span>
+  </div>
+  <div class="chart-wrap fade-in-delay-3">
+    <div class="bar-chart">${buildBarChart(summary.hist_years, summary.hist_revenue, summary.proj_rev_growth)}</div>
+  </div>
+
+  <!-- FCF schedule -->
+  <div class="section-rule fade-in-delay-4">
+    <span class="section-rule-label">DCF — Projected Free Cash Flows</span>
+    <div class="section-rule-line"></div>
+  </div>
+  <div class="fade-in-delay-4">${buildFCFTable(dcf.fcf_schedule, ticker)}</div>
+
+  <!-- Peers -->
+  ${Object.keys(peers).length > 0 ? `
+  <div class="section-rule fade-in-delay-5">
+    <span class="section-rule-label">Peer Comparison</span>
+    <div class="section-rule-line"></div>
+  </div>
+  <div class="fade-in-delay-5" style="overflow-x:auto">${buildPeersTable(ticker, summary, peers)}</div>
+  ` : ''}
+
+  <div style="margin-top:32px;padding:16px;background:var(--cream);border:1px solid var(--rule);font-size:11px;color:var(--muted);line-height:1.7;font-style:italic;">
+    <strong>Disclaimer:</strong> This analysis is generated by an automated financial model using publicly available data from Yahoo Finance and SEC EDGAR.
+    It is for informational purposes only and does not constitute investment advice. DCF models are sensitive to assumptions and may not reflect all risks.
+    Always conduct your own due diligence before making investment decisions.
+  </div>
+  `;
+
+  const resultsEl = document.getElementById('results');
+  resultsEl.innerHTML = html;
+  resultsEl.classList.add('active');
+  resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function runAnalysis() {
+  const ticker = document.getElementById('ticker-input').value.trim().toUpperCase();
+  const years  = parseInt(document.getElementById('years-select').value);
+
+  if (!ticker) {
+    document.getElementById('error-box').textContent = 'Please enter a ticker symbol.';
+    document.getElementById('error-box').classList.add('active');
+    return;
+  }
+
+  // Reset UI
+  document.getElementById('error-box').classList.remove('active');
+  document.getElementById('results').classList.remove('active');
+  document.getElementById('results').innerHTML = '';
+  const btn = document.getElementById('search-btn');
+  btn.disabled = true;
+  btn.textContent = 'Analyzing…';
+
+  // Loading bar
+  const bar = document.getElementById('loading-bar');
+  const progress = document.getElementById('loading-progress');
+  const msg = document.getElementById('loading-msg');
+  bar.classList.add('active');
+  msg.classList.add('active');
+
+  // Animate progress while waiting
+  let pct = 0;
+  let msgIdx = 0;
+  const interval = setInterval(() => {
+    pct = Math.min(pct + (pct < 60 ? 4 : pct < 85 ? 1.5 : 0.5), 92);
+    progress.style.width = pct + '%';
+    if (msgIdx < LOAD_MESSAGES.length - 1 && pct > (msgIdx + 1) * 14) {
+      msgIdx++;
+      msg.textContent = LOAD_MESSAGES[msgIdx];
+    }
+  }, 500);
+
+  try {
+    const resp = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, years }),
+    });
+    const data = await resp.json();
+
+    clearInterval(interval);
+    progress.style.width = '100%';
+    setTimeout(() => { bar.classList.remove('active'); msg.classList.remove('active'); }, 400);
+
+    if (!resp.ok || data.error) {
+      throw new Error(data.error || `Server error ${resp.status}`);
+    }
+
+    renderResults(data);
+  } catch (err) {
+    clearInterval(interval);
+    bar.classList.remove('active');
+    msg.classList.remove('active');
+    document.getElementById('error-box').textContent = `Error: ${err.message}`;
+    document.getElementById('error-box').classList.add('active');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Analyze ↗';
+    progress.style.width = '0%';
+  }
+}
+
+// Enter key support
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('ticker-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') runAnalysis();
+  });
+});
+</script>
+</body>
+</html>
