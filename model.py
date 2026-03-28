@@ -93,13 +93,10 @@ HEADERS = {"User-Agent": "FinancialModel research@example.com", "Accept": "appli
 
 def _ensure_yfinance():
     try:
-        import yfinance as yf; return yf
+        import yfinance as yf
+        return yf
     except ImportError:
-        print("  Installing yfinance (one-time setup)...")
-        import subprocess
-        subprocess.check_call([sys.executable,"-m","pip","install","yfinance","--quiet"],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        import yfinance as yf; return yf
+        raise ImportError("yfinance not installed. Add yfinance to requirements.txt")
 
 def get_cik(ticker):
     r = requests.get("https://www.sec.gov/files/company_tickers.json",headers=HEADERS,timeout=20)
