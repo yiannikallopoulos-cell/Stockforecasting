@@ -1,5 +1,5 @@
 """
-Equilens — Stock Analysis Web App
+Sharp Money — Stock Analysis Web App
 """
 
 import io
@@ -133,7 +133,11 @@ def safe_float(v, default=0.0):
         return default
 
 
-def compute_dcf(data, assumptions, n_proj=5):
+def _run_dcf_scenario(data, assumptions, n_proj, scenario_key="base"):
+    """
+    Run DCF for a given scenario using per-year projected margins,
+    NWC drag, and split CapEx. Returns equity value and FCF schedule.
+    """
     scale      = 1_000_000
     stock      = data.get("stock", {})
     price      = safe_float(stock.get("price"), 0)
@@ -148,43 +152,149 @@ def compute_dcf(data, assumptions, n_proj=5):
     g    = safe_float(assumptions.get("lt_growth"), 0.03)
     tax  = safe_float(assumptions.get("tax_rate"), 0.21)
     dep  = safe_float(assumptions.get("dep_pct"), 0.04)
-    cx   = safe_float(assumptions.get("capex_pct"), 0.05)
-    opm  = safe_float(assumptions.get("op_margin"), 0.15)
 
     if coe <= g: coe = g + 0.02
 
-    base_rev   = max(safe_float(last_val(data.get("revenue", {})), 1), 1)
-    last_sbc   = safe_float(last_val(data.get("stock_comp", {})), 0)
-    rev_growth = assumptions.get("rev_growth", [0.08] * n_proj)
+    # Pull scenario-specific projections
+    scenarios   = assumptions.get("scenarios", {})
+    scen        = scenarios.get(scenario_key, scenarios.get("base", {}))
+    rev_growth  = scen.get("rev_growth",  assumptions.get("rev_growth",  [0.08]*n_proj))
+    om_proj     = scen.get("op_margin",   assumptions.get("op_margin_proj", [assumptions.get("op_margin", 0.15)]*n_proj))
+    capex_proj  = scen.get("capex_pct",   assumptions.get("capex_proj",  [assumptions.get("capex_pct", 0.05)]*n_proj))
+    nwc_proj    = assumptions.get("nwc_change_proj", [0.0]*n_proj)
+
+    base_rev  = max(safe_float(last_val(data.get("revenue", {})), 1), 1)
+    last_sbc  = safe_float(last_val(data.get("stock_comp", {})), 0)
 
     fcfs = []; pv_sum = 0.0; cur_rev = base_rev
     for i in range(n_proj):
-        g_i     = safe_float(rev_growth[i] if i < len(rev_growth) else 0.05, 0.05)
+        g_i   = safe_float(rev_growth[i] if i < len(rev_growth) else 0.05, 0.05)
+        opm_i = safe_float(om_proj[i]    if i < len(om_proj)    else 0.15, 0.15)
+        cx_i  = safe_float(capex_proj[i] if i < len(capex_proj) else 0.05, 0.05)
+        nwc_i = safe_float(nwc_proj[i]   if i < len(nwc_proj)   else 0.0,  0.0)
+
         cur_rev = cur_rev * (1 + g_i)
-        fcf_i   = cur_rev*opm*(1-tax) + cur_rev*dep - cur_rev*cx + last_sbc
-        disc    = 1.0 / (1+coe)**(i+0.5)
-        fcfs.append({"year":i+1,"fcf":round(fcf_i/scale,1),"pv":round(fcf_i*disc/scale,1)})
+        ni_i    = cur_rev * opm_i * (1 - tax)
+        da_i    = cur_rev * dep
+        cx_val  = cur_rev * cx_i
+        nwc_drag= cur_rev * nwc_i          # cash consumed by working capital build
+        sbc_i   = last_sbc
+        fcf_i   = ni_i + da_i - cx_val - nwc_drag + sbc_i
+
+        disc = 1.0 / (1 + coe) ** (i + 0.5)
+        fcfs.append({
+            "year":      i + 1,
+            "revenue":   round(cur_rev / scale, 1),
+            "op_margin": round(opm_i * 100, 1),
+            "fcf":       round(fcf_i / scale, 1),
+            "pv":        round(fcf_i * disc / scale, 1),
+        })
         pv_sum += fcf_i * disc
 
-    tv    = fcfs[-1]["fcf"]*scale*(1+g)/(coe-g)
-    pv_tv = tv/(1+coe)**n_proj
+    # Terminal value using last year FCF (Gordon Growth)
+    last_fcf_raw = fcfs[-1]["fcf"] * scale
+    tv    = last_fcf_raw * (1 + g) / (coe - g)
+    pv_tv = tv / (1 + coe) ** n_proj
+
     eq_v  = pv_sum + pv_tv + last_cash - last_debt
-    shrs  = max(shares_out/scale, 0.001)
-    dcf_p = max(0, eq_v/scale/shrs)
-    if price > 0: dcf_p = min(dcf_p, price*20)
-    up    = (dcf_p/price-1) if price > 0 else 0
+    shrs  = max(shares_out / scale, 0.001)
+    dcf_p = max(0, eq_v / scale / shrs)
+    if price > 0:
+        dcf_p = min(dcf_p, price * 25)
 
-    if   up>=0.30:  r,c,d,s="STRONG BUY","#1a6b2e","Model implies ≥30% upside — significantly undervalued",5
-    elif up>=0.10:  r,c,d,s="BUY","#2d9e52","Model implies 10–30% upside — moderately undervalued",4
-    elif up>=-0.10: r,c,d,s="HOLD","#8a6d10","Model implies within ±10% of current price — fairly valued",3
-    elif up>=-0.25: r,c,d,s="SELL","#c45e1a","Model implies 10–25% downside — moderately overvalued",2
-    else:           r,c,d,s="STRONG SELL","#a81e1e","Model implies >25% downside — significantly overvalued",1
+    return {
+        "dcf_price":    round(dcf_p, 2),
+        "pv_fcfs":      round(pv_sum / scale, 1),
+        "pv_tv":        round(pv_tv / scale, 1),
+        "equity_value": round(eq_v / scale, 1),
+        "fcf_schedule": fcfs,
+        "coe":          coe,
+    }
 
-    return {"dcf_price":round(dcf_p,2),"current_price":round(price,2),
-            "upside_pct":round(up*100,1),"rating":r,"rating_color":c,"rating_desc":d,"stars":s,
-            "coe_pct":round(coe*100,2),"terminal_growth_pct":round(g*100,2),
-            "pv_fcfs":round(pv_sum/scale,1),"pv_tv":round(pv_tv/scale,1),
-            "equity_value":round(eq_v/scale,1),"fcf_schedule":fcfs,"n_proj":n_proj}
+
+def _rating_from_upside(upside):
+    if   upside >= 0.30:  return "STRONG BUY",  "#1a6b2e", "Model implies ≥30% upside — significantly undervalued", 5
+    elif upside >= 0.10:  return "BUY",          "#2d9e52", "Model implies 10–30% upside — moderately undervalued", 4
+    elif upside >= -0.10: return "HOLD",         "#8a6d10", "Model implies within ±10% of current price — fairly valued", 3
+    elif upside >= -0.25: return "SELL",         "#c45e1a", "Model implies 10–25% downside — moderately overvalued", 2
+    else:                 return "STRONG SELL",  "#a81e1e", "Model implies >25% downside — significantly overvalued", 1
+
+
+def compute_dcf(data, assumptions, n_proj=5):
+    """
+    Run DCF across all three scenarios (bull/base/bear).
+    Base case drives the primary rating; scenarios provide the price range.
+    """
+    stock  = data.get("stock", {})
+    price  = safe_float(stock.get("price"), 0)
+
+    # Run all three scenarios
+    base_res = _run_dcf_scenario(data, assumptions, n_proj, "base")
+    bull_res = _run_dcf_scenario(data, assumptions, n_proj, "bull")
+    bear_res = _run_dcf_scenario(data, assumptions, n_proj, "bear")
+
+    dcf_p  = base_res["dcf_price"]
+    coe    = base_res["coe"]
+    g      = safe_float(assumptions.get("lt_growth"), 0.03)
+    upside = (dcf_p / price - 1) if price > 0 else 0
+
+    r, c, d, s = _rating_from_upside(upside)
+
+    # Build sensitivity table: CoE (rows) vs terminal growth (cols)
+    coe_range = [coe - 0.02, coe - 0.01, coe, coe + 0.01, coe + 0.02]
+    g_range   = [g - 0.01, g, g + 0.01]
+    sensitivity = []
+    for coe_s in coe_range:
+        row_s = []
+        for g_s in g_range:
+            try:
+                tmp_assumptions = dict(assumptions)
+                tmp_assumptions["lt_growth"] = g_s
+                # Quick terminal value recalc using base FCF
+                last_fcf = base_res["fcf_schedule"][-1]["fcf"] * 1_000_000
+                tv_s     = last_fcf * (1 + g_s) / (max(coe_s, g_s + 0.001) - g_s)
+                pv_tv_s  = tv_s / (1 + coe_s) ** n_proj
+                scale    = 1_000_000
+                shares   = max(safe_float(stock.get("shares_out"), 1) / scale, 0.001)
+                last_cash= safe_float(last_val(data.get("cash", {})), 0) / scale
+                last_debt= safe_float(last_val(data.get("lt_debt", {})), 0) / scale
+                eq_s     = base_res["pv_fcfs"] + pv_tv_s / scale + last_cash - last_debt
+                px_s     = max(0, eq_s / shares)
+                row_s.append(round(px_s, 2))
+            except Exception:
+                row_s.append(None)
+        sensitivity.append(row_s)
+
+    return {
+        "dcf_price":           dcf_p,
+        "current_price":       round(price, 2),
+        "upside_pct":          round(upside * 100, 1),
+        "rating":              r,
+        "rating_color":        c,
+        "rating_desc":         d,
+        "stars":               s,
+        "coe_pct":             round(coe * 100, 2),
+        "terminal_growth_pct": round(g * 100, 2),
+        "pv_fcfs":             base_res["pv_fcfs"],
+        "pv_tv":               base_res["pv_tv"],
+        "equity_value":        base_res["equity_value"],
+        "fcf_schedule":        base_res["fcf_schedule"],
+        "n_proj":              n_proj,
+        # Scenario prices
+        "bull_price":          bull_res["dcf_price"],
+        "bear_price":          bear_res["dcf_price"],
+        "bull_upside":         round((bull_res["dcf_price"]/price-1)*100, 1) if price else 0,
+        "bear_upside":         round((bear_res["dcf_price"]/price-1)*100, 1) if price else 0,
+        # Model metadata
+        "stage":               assumptions.get("stage", "unknown"),
+        "dol":                 assumptions.get("dol", 1.0),
+        "gm_trend":            assumptions.get("gm_trend", 0),
+        "om_trend":            assumptions.get("om_trend", 0),
+        # Sensitivity table
+        "sensitivity_prices":  sensitivity,
+        "sensitivity_coe":     [round(c*100,1) for c in coe_range],
+        "sensitivity_g":       [round(g_val*100,1) for g_val in g_range],
+    }
 
 
 def compute_summary(data, assumptions):

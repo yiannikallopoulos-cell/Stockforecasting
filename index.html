@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Equilens — Stock Analysis</title>
+<title>Sharp Money — Stock Analysis</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -562,14 +562,14 @@
 <body>
 
 <header class="masthead">
-  <div class="masthead-logo">Equi<span>lens</span></div>
-  <div class="masthead-tagline">Fundamental Analysis Engine</div>
+  <div class="masthead-logo">Sharp<span>Money</span></div>
+  <div class="masthead-tagline">Institutional-Grade Stock Analysis</div>
 </header>
 
 <main>
   <section class="hero">
-    <h1 class="hero-headline">What is this stock<br><em>actually worth?</em></h1>
-    <p class="hero-sub">Enter any ticker for a full DCF model, valuation rating, and downloadable Excel analysis.</p>
+    <h1 class="hero-headline">Find where<br><em>sharp money goes.</em></h1>
+    <p class="hero-sub">Enter any ticker for a professional DCF model, Bull/Base/Bear scenarios, and institutional-grade Excel output.</p>
 
     <div class="search-form">
       <input type="text" id="ticker-input" placeholder="e.g. META, AAPL, NVDA" maxlength="10" autocomplete="off">
@@ -661,10 +661,60 @@ function buildBarChart(histYears, histRevenue, projGrowth) {
   return bars;
 }
 
+function buildSensitivityTable(dcf) {
+  if (!dcf.sensitivity_prices || !dcf.sensitivity_coe || !dcf.sensitivity_g) return "";
+  const prices = dcf.sensitivity_prices;
+  const coes   = dcf.sensitivity_coe;
+  const gs     = dcf.sensitivity_g;
+  const curPx  = dcf.current_price;
+  const basePx = dcf.dcf_price;
+
+  let headerCells = `<th style="text-align:left;background:var(--cream)">CoE \ Terminal g</th>`;
+  gs.forEach(g => headerCells += `<th>${g}%</th>`);
+
+  let bodyRows = "";
+  prices.forEach((row, ri) => {
+    const isBaseCoe = Math.abs(coes[ri] - dcf.coe_pct) < 0.15;
+    bodyRows += `<tr style="${isBaseCoe?'background:var(--cream);font-weight:600':''}">`;
+    bodyRows += `<td style="text-align:left;font-weight:600">${coes[ri]}%</td>`;
+    row.forEach((px, ci) => {
+      if (px === null) { bodyRows += `<td>—</td>`; return; }
+      const up = curPx ? ((px/curPx)-1)*100 : 0;
+      const isBase = isBaseCoe && Math.abs(gs[ci]-dcf.terminal_growth_pct)<0.15;
+      let bg = "";
+      if (up >= 30) bg = "background:#e8f5ec";
+      else if (up >= 10) bg = "background:#f0faf3";
+      else if (up >= -10) bg = "background:#fdf8e8";
+      else if (up >= -25) bg = "background:#fef0e6";
+      else bg = "background:#fce8e8";
+      bodyRows += `<td style="${bg}${isBase?';border:2px solid var(--ink)':''}">$${px.toFixed(0)}<br><span style="font-size:9px;color:#666">${up>=0?'+':''}${up.toFixed(0)}%</span></td>`;
+    });
+    bodyRows += `</tr>`;
+  });
+
+  return `
+  <div class="section-rule fade-in-delay-4">
+    <span class="section-rule-label">Sensitivity Analysis — DCF Price by CoE &amp; Terminal Growth</span>
+    <div class="section-rule-line"></div>
+    <span class="section-rule-label" style="color:var(--gold)">■ Base case outlined</span>
+  </div>
+  <div style="overflow-x:auto;margin-bottom:24px" class="fade-in-delay-4">
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr>${headerCells}</tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px;font-style:italic">
+      Green = upside ≥30% · Light green = 10–30% · Yellow = ±10% · Orange = -10–25% · Red = &gt;25% downside
+    </div>
+  </div>`;
+}
+
 function buildFCFTable(fcfSchedule, ticker) {
   const rows = fcfSchedule.map(row => `
     <tr>
-      <td>${ticker} ${row.year > 0 ? 'Year ' + row.year : ''}</td>
+      <td>Year ${row.year}</td>
+      <td>${row.revenue !== undefined ? fmt(row.revenue, 1, '$', 'mm') : '—'}</td>
+      <td>${row.op_margin !== undefined ? fmt(row.op_margin, 1, '', '%') : '—'}</td>
       <td>${fmt(row.fcf, 0, '$', 'mm')}</td>
       <td>${fmt(row.pv, 0, '$', 'mm')}</td>
     </tr>`).join('');
@@ -672,6 +722,8 @@ function buildFCFTable(fcfSchedule, ticker) {
     <thead>
       <tr>
         <th style="text-align:left">Period</th>
+        <th>Revenue ($mm)</th>
+        <th>Op Margin</th>
         <th>FCF ($mm)</th>
         <th>PV of FCF ($mm)</th>
       </tr>
@@ -765,9 +817,9 @@ function renderResults(data) {
 
     <div class="dcf-grid">
       <div class="dcf-cell">
-        <div class="dcf-cell-label">DCF Implied Price</div>
+        <div class="dcf-cell-label">DCF Implied Price (Base)</div>
         <div class="dcf-cell-value">$${fmt(dcf.dcf_price, 2)}</div>
-        <div class="dcf-cell-sub">Based on ${dcf.n_proj}-yr FCF model</div>
+        <div class="dcf-cell-sub">${dcf.n_proj}-yr FCF · ${dcf.stage || 'base case'}</div>
       </div>
       <div class="dcf-cell">
         <div class="dcf-cell-label">Current Price</div>
@@ -775,14 +827,36 @@ function renderResults(data) {
         <div class="dcf-cell-sub">Live market price</div>
       </div>
       <div class="dcf-cell">
-        <div class="dcf-cell-label">Implied Upside</div>
+        <div class="dcf-cell-label">Implied Upside (Base)</div>
         <div class="dcf-cell-value ${upsideClass}">${fmtPct(dcf.upside_pct)}</div>
-        <div class="dcf-cell-sub">DCF vs market</div>
+        <div class="dcf-cell-sub">DCF vs current price</div>
       </div>
       <div class="dcf-cell">
         <div class="dcf-cell-label">Cost of Equity</div>
         <div class="dcf-cell-value">${fmt(dcf.coe_pct, 1, '', '%')}</div>
         <div class="dcf-cell-sub">CAPM, g=${fmt(dcf.terminal_growth_pct, 1, '', '%')}</div>
+      </div>
+    </div>
+
+    <!-- Scenario bar -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:12px;">
+      <div style="background:#fce8e8;padding:14px 18px;text-align:center">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#a81e1e;font-weight:600;margin-bottom:4px">Bear Case</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:22px;color:#a81e1e">$${fmt(dcf.bear_price, 2)}</div>
+        <div style="font-size:11px;color:#a81e1e;margin-top:2px">${fmtPct(dcf.bear_upside)}</div>
+        <div style="font-size:10px;color:#999;margin-top:3px">70% rev growth · 88% margins</div>
+      </div>
+      <div style="background:var(--cream);padding:14px 18px;text-align:center;border-left:3px solid var(--ink);border-right:3px solid var(--ink)">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink);font-weight:600;margin-bottom:4px">Base Case ★</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--ink)">$${fmt(dcf.dcf_price, 2)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${fmtPct(dcf.upside_pct)}</div>
+        <div style="font-size:10px;color:#999;margin-top:3px">Model-derived assumptions</div>
+      </div>
+      <div style="background:#e8f5ec;padding:14px 18px;text-align:center">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#1a6b2e;font-weight:600;margin-bottom:4px">Bull Case</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:22px;color:#1a6b2e">$${fmt(dcf.bull_price, 2)}</div>
+        <div style="font-size:11px;color:#1a6b2e;margin-top:2px">${fmtPct(dcf.bull_upside)}</div>
+        <div style="font-size:10px;color:#999;margin-top:3px">125% rev growth · 110% margins</div>
       </div>
     </div>
 
@@ -842,6 +916,36 @@ function renderResults(data) {
     <div class="section-rule-line"></div>
   </div>
   <div class="fade-in-delay-4">${buildFCFTable(dcf.fcf_schedule, ticker)}</div>
+
+  <!-- Sensitivity table -->
+  ${dcf.sensitivity_prices ? buildSensitivityTable(dcf) : ""}
+
+  <!-- Model signals -->
+  <div class="section-rule fade-in-delay-4">
+    <span class="section-rule-label">Model Signals</span>
+    <div class="section-rule-line"></div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);border:1px solid var(--rule);margin-bottom:24px" class="fade-in-delay-4">
+    <div style="background:white;padding:14px 16px">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">Company Stage</div>
+      <div style="font-size:15px;font-weight:600;text-transform:capitalize">${(dcf.stage||'').replace('_',' ')}</div>
+    </div>
+    <div style="background:white;padding:14px 16px">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">Operating Leverage</div>
+      <div style="font-size:15px;font-weight:600">${fmt(dcf.dol||1,2,'','x')}</div>
+      <div style="font-size:10px;color:var(--muted)">Margin sensitivity to growth</div>
+    </div>
+    <div style="background:white;padding:14px 16px">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">Gross Margin Trend</div>
+      <div style="font-size:15px;font-weight:600;color:${(dcf.gm_trend||0)>=0?'#1a6b2e':'#a81e1e'}">${(dcf.gm_trend||0)>=0?'+':''}{fmt((dcf.gm_trend||0)*100,2,'','pp/yr')}</div>
+      <div style="font-size:10px;color:var(--muted)">Expansion vs compression</div>
+    </div>
+    <div style="background:white;padding:14px 16px">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">Op Margin Trend</div>
+      <div style="font-size:15px;font-weight:600;color:${(dcf.om_trend||0)>=0?'#1a6b2e':'#a81e1e'}">${(dcf.om_trend||0)>=0?'+':''}{fmt((dcf.om_trend||0)*100,2,'','pp/yr')}</div>
+      <div style="font-size:10px;color:var(--muted)">Operating leverage signal</div>
+    </div>
+  </div>
 
   <!-- Peers -->
   ${Object.keys(peers).length > 0 ? `

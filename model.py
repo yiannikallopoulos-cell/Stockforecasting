@@ -508,18 +508,15 @@ def fetch_financials(ticker):
         "stock_comp":m(yf_cf.get("sbc",{}),sec_sbc),
     }
 
-# ── Forecast Assumptions ──────────────────────────────────────────────────────
+# ── Forecast Assumptions — Smarter Forecasting Engine v2 ─────────────────────
 
 def last_val(s, default=0):
     if not s: return default
     return sorted(s.items())[-1][1]
 
-def avg_margin(num, denom, n=3):
-    vals = []
-    for yr in sorted(num.keys())[-n:]:
-        d = denom.get(yr)
-        if d and d != 0: vals.append(num[yr] / d)
-    return sum(vals) / len(vals) if vals else 0
+def sorted_vals(s):
+    """Return list of (year, value) sorted ascending, filtering None/zero."""
+    return [(yr, v) for yr, v in sorted(s.items()) if v and v != 0]
 
 def cagr(s, n=3):
     vals = [(yr, v) for yr, v in sorted(s.items()) if v and v > 0]
@@ -530,94 +527,442 @@ def cagr(s, n=3):
     if yrs == 0 or start <= 0: return 0.08
     return (end / start) ** (1 / yrs) - 1
 
-def build_assumptions(data, n_proj):
-    rev = data["revenue"]; ni = data["net_income"]
-    cogs_d = data["cogs"]; gp = data["gross_profit"]
-    sga = data["sga_exp"]; rd = data["rd_exp"]
-    oi = data["op_income"]; te = data["tax_exp"]
-    dep = data["dep_amor"]; capex = data["capex"]
-    lt_debt = data["lt_debt"]; eq = data["total_equity"]
-    analyst = data.get("analyst_est", {})
-    stock   = data["stock"]
+def exp_weighted_avg(series_dict, n=4, decay=0.5):
+    """
+    Exponentially weighted average — recent years weighted more heavily.
+    decay=0.5 means most recent year gets 2x weight of second-most-recent.
+    Returns weighted average of the values.
+    """
+    vals = sorted_vals(series_dict)
+    if not vals: return 0
+    recent = vals[-n:]
+    total_weight = 0
+    weighted_sum = 0
+    for i, (yr, v) in enumerate(recent):
+        w = (1 + decay) ** i   # more recent = higher weight
+        weighted_sum += v * w
+        total_weight += w
+    return weighted_sum / total_weight if total_weight else 0
 
-    rev_cagr = cagr(rev, 3)
+def avg_margin(num, denom, n=3, weighted=False):
+    """Compute average or exp-weighted margin ratio."""
+    vals = []
+    weights = []
+    yrs = sorted(set(num.keys()) & set(denom.keys()))[-n:]
+    for i, yr in enumerate(yrs):
+        d = denom.get(yr)
+        if d and d != 0:
+            vals.append(num[yr] / d)
+            weights.append((1.5 ** i) if weighted else 1.0)
+    if not vals: return 0
+    if weighted:
+        return sum(v * w for v, w in zip(vals, weights)) / sum(weights)
+    return sum(vals) / len(vals)
 
-    # Incorporate analyst NTM revenue growth estimate if available
-    analyst_yr1_growth = None
-    if analyst.get("+1y") and analyst["+1y"].get("growth"):
-        analyst_yr1_growth = analyst["+1y"]["growth"]
-    if analyst.get("+1y") and analyst["+1y"].get("rev_est") and last_val(rev):
-        analyst_yr1_growth = analyst["+1y"]["rev_est"] / last_val(rev) - 1
+def margin_trend(num, denom, n=4):
+    """
+    Compute margin trend (slope) over n years.
+    Returns (latest_margin, trend_per_year, r_squared).
+    Used to detect margin expansion/compression.
+    """
+    margins = []
+    yrs_list = sorted(set(num.keys()) & set(denom.keys()))[-n:]
+    for yr in yrs_list:
+        d = denom.get(yr)
+        if d and d != 0:
+            margins.append(num[yr] / d)
+    if len(margins) < 2:
+        latest = margins[-1] if margins else 0
+        return latest, 0.0, 0.0
+    n_ = len(margins)
+    x = list(range(n_))
+    x_mean = sum(x) / n_
+    y_mean = sum(margins) / n_
+    ss_xy = sum((x[i] - x_mean) * (margins[i] - y_mean) for i in range(n_))
+    ss_xx = sum((x[i] - x_mean) ** 2 for i in range(n_))
+    slope = ss_xy / ss_xx if ss_xx != 0 else 0
+    # R-squared
+    y_pred = [y_mean + slope * (x[i] - x_mean) for i in range(n_)]
+    ss_res = sum((margins[i] - y_pred[i]) ** 2 for i in range(n_))
+    ss_tot = sum((margins[i] - y_mean) ** 2 for i in range(n_))
+    r2 = 1 - ss_res / ss_tot if ss_tot != 0 else 0
+    return margins[-1], slope, max(0, r2)
 
-    # Blend historical CAGR with analyst estimate (60% analyst, 40% historical if available)
-    if analyst_yr1_growth and abs(analyst_yr1_growth) < 0.5:
-        base_g = 0.6 * analyst_yr1_growth + 0.4 * rev_cagr
-        print(f"    ✓ Yr1 growth blended: analyst {analyst_yr1_growth:.1%} + hist CAGR {rev_cagr:.1%} = {base_g:.1%}")
+def operating_leverage(rev, oi, n=3):
+    """
+    Estimate degree of operating leverage (DOL).
+    DOL = % change in EBIT / % change in revenue.
+    High DOL (>2) = margins expand fast as revenue grows.
+    """
+    rev_vals = sorted_vals(rev)[-n-1:]
+    oi_vals_d = dict(sorted_vals(oi))
+    if len(rev_vals) < 2: return 1.0
+    dols = []
+    for i in range(1, len(rev_vals)):
+        yr_prev, r_prev = rev_vals[i-1]
+        yr_curr, r_curr = rev_vals[i]
+        o_prev = oi_vals_d.get(yr_prev)
+        o_curr = oi_vals_d.get(yr_curr)
+        if r_prev and o_prev and r_prev != 0 and o_prev != 0:
+            pct_rev = (r_curr - r_prev) / abs(r_prev)
+            pct_oi  = (o_curr - o_prev) / abs(o_prev)
+            if pct_rev != 0:
+                dols.append(pct_oi / pct_rev)
+    if not dols: return 1.0
+    # Cap between 0 and 5
+    return max(0.5, min(5.0, sum(dols) / len(dols)))
+
+def revenue_mean_reversion(base_g, industry_avg_g=0.08, years_to_mean=5):
+    """
+    Project revenue growth tapering toward industry average over time.
+    High-growth companies naturally decelerate; low-growth ones stabilize.
+    Returns list of annual growth rates.
+    """
+    # Pull toward industry avg each year, faster if far from it
+    growth_rates = []
+    g = base_g
+    for i in range(years_to_mean):
+        gap = industry_avg_g - g
+        # Reversion speed: 25% of gap closed per year
+        g = g + 0.25 * gap
+        g = max(g, 0.02)   # floor at 2% (positive growth)
+        growth_rates.append(round(g, 4))
+    return growth_rates
+
+def classify_company(rev, oi, rev_cagr, gross_margin_val):
+    """
+    Classify company into growth stage for appropriate modeling treatment.
+    Returns one of: 'hyper_growth', 'high_growth', 'mature_growth',
+                    'stable', 'turnaround', 'declining'
+    """
+    latest_oi = last_val(oi) if oi else 0
+    latest_rev = last_val(rev) if rev else 1
+    op_margin_ltm = latest_oi / latest_rev if latest_rev else 0
+
+    if rev_cagr > 0.25 and op_margin_ltm < 0.05:
+        return "hyper_growth"       # High growth, not yet profitable
+    elif rev_cagr > 0.15:
+        return "high_growth"        # Strong growth, likely profitable
+    elif rev_cagr > 0.07:
+        return "mature_growth"      # Solid steady growth
+    elif rev_cagr >= 0.0:
+        return "stable"             # Low growth, cash generative
+    elif rev_cagr > -0.05:
+        return "turnaround"         # Slight decline, may recover
     else:
-        base_g = rev_cagr
-        print(f"    ✓ Yr1 growth from 3yr CAGR: {base_g:.1%}")
+        return "declining"          # Structural decline
 
-    base_g = max(min(base_g, 0.40), -0.05)
-    rev_growth = []
-    for i in range(n_proj):
-        g = base_g * (0.88 ** i)
-        g = max(g, 0.03)
-        rev_growth.append(round(g, 4))
+def nwc_ratio(curr_assets, curr_liab, rev, n=3):
+    """
+    Net working capital as % of revenue — captures cash conversion cycle.
+    Rising NWC ratio = consumes more cash as it grows (bad for FCF).
+    Falling NWC ratio = becomes more efficient (good for FCF).
+    """
+    ratios = []
+    for yr in sorted(rev.keys())[-n:]:
+        ca = curr_assets.get(yr, 0) or 0
+        cl = curr_liab.get(yr, 0) or 0
+        rv = rev.get(yr, 0) or 0
+        if rv: ratios.append((ca - cl) / rv)
+    return sum(ratios) / len(ratios) if ratios else 0.10
 
-    # Margins — use 3yr avg from historicals, cross-check vs LTM from Yahoo
-    gm = avg_margin(gp if gp else {y: rev[y] - cogs_d.get(y,0) for y in rev if y in cogs_d}, rev)
-    if not gm or gm < 0.01:
-        gm = stock.get("gross_margin") or 0.55
-    # Use Yahoo LTM as tie-breaker if very different
+def maintenance_vs_growth_capex(capex, dep, rev):
+    """
+    Distinguish maintenance CapEx (replacing existing assets) from growth CapEx.
+    Rule of thumb: maintenance CapEx ≈ D&A.
+    Growth CapEx = total CapEx - maintenance CapEx.
+    Returns (maintenance_pct_rev, growth_pct_rev).
+    """
+    total_cx = abs(avg_margin(capex, rev)) if capex else 0
+    dep_pct  = avg_margin(dep, rev) if dep else 0
+    maint    = min(dep_pct, total_cx)            # maintenance <= total capex
+    growth   = max(0, total_cx - maint)           # remainder is growth
+    return round(maint, 4), round(growth, 4)
+
+def build_assumptions(data, n_proj):
+    """
+    Smarter forecasting engine incorporating:
+    - Exponential weighting (recent years weighted more heavily)
+    - Analyst consensus blending with dynamic weight based on coverage depth
+    - Mean reversion toward industry averages over projection period
+    - Margin trend detection (expansion vs compression)
+    - Operating leverage adjustment
+    - Company stage classification
+    - NWC efficiency modeling
+    - Maintenance vs growth CapEx split
+    - Scenario framework (bull / base / bear)
+    """
+    rev    = data["revenue"]
+    ni     = data["net_income"]
+    cogs_d = data["cogs"]
+    gp     = data["gross_profit"]
+    sga    = data["sga_exp"]
+    rd     = data["rd_exp"]
+    oi     = data["op_income"]
+    te     = data["tax_exp"]
+    dep    = data["dep_amor"]
+    capex  = data["capex"]
+    lt_debt= data["lt_debt"]
+    eq     = data["total_equity"]
+    ca     = data.get("curr_assets", {})
+    cl     = data.get("curr_liab", {})
+    analyst= data.get("analyst_est", {})
+    stock  = data["stock"]
+    analyst_count = int(stock.get("analyst_count") or 0)
+
+    # ── Revenue Growth ─────────────────────────────────────────────────────────
+    rev_cagr_3yr = cagr(rev, 3)
+    rev_cagr_5yr = cagr(rev, 5)
+
+    # Analyst estimate — weight by coverage depth (more analysts = more reliable)
+    analyst_yr1_growth = None
+    if analyst.get("+1y", {}).get("rev_est") and last_val(rev):
+        analyst_yr1_growth = analyst["+1y"]["rev_est"] / last_val(rev) - 1
+    elif analyst.get("+1y", {}).get("growth"):
+        analyst_yr1_growth = analyst["+1y"]["growth"]
+
+    # Dynamic analyst weight: scale from 30% (1-5 analysts) to 70% (20+ analysts)
+    if analyst_yr1_growth is not None and abs(analyst_yr1_growth) < 0.60:
+        analyst_weight = min(0.30 + (analyst_count / 30) * 0.40, 0.70)
+        hist_weight    = 1 - analyst_weight
+        base_g         = analyst_weight * analyst_yr1_growth + hist_weight * rev_cagr_3yr
+        print(f"    ✓ Rev growth: analyst({analyst_yr1_growth:.1%}) × {analyst_weight:.0%} + "
+              f"hist({rev_cagr_3yr:.1%}) × {hist_weight:.0%} = {base_g:.1%} "
+              f"[{analyst_count} analysts]")
+    else:
+        # No analyst data — blend 3yr and 5yr CAGR, weight 3yr more
+        base_g = 0.65 * rev_cagr_3yr + 0.35 * rev_cagr_5yr
+        print(f"    ✓ Rev growth: 3yr CAGR {rev_cagr_3yr:.1%} blended with "
+              f"5yr {rev_cagr_5yr:.1%} = {base_g:.1%}")
+
+    base_g = max(min(base_g, 0.45), -0.10)
+
+    # Company stage classification — sets mean-reversion target
+    stage = classify_company(rev, oi, rev_cagr_3yr,
+                             stock.get("gross_margin", 0.50) or 0.50)
+    stage_targets = {
+        "hyper_growth":  0.15,   # Mean-revert toward high but sustainable growth
+        "high_growth":   0.10,
+        "mature_growth": 0.07,
+        "stable":        0.04,
+        "turnaround":    0.05,
+        "declining":     0.02,
+    }
+    industry_avg_g = stage_targets.get(stage, 0.07)
+    print(f"    ✓ Company stage: {stage} | mean-reversion target: {industry_avg_g:.0%}")
+
+    # Apply mean reversion over projection period
+    rev_growth = revenue_mean_reversion(base_g, industry_avg_g, n_proj)
+    print(f"    ✓ Revenue growth schedule: {[f'{g:.1%}' for g in rev_growth]}")
+
+    # ── Gross Margin ───────────────────────────────────────────────────────────
+    # Detect trend — expanding or compressing?
+    if gp and rev:
+        gm_latest, gm_trend, gm_r2 = margin_trend(gp, rev)
+    else:
+        gp_proxy = {y: rev[y] - cogs_d.get(y, 0) for y in rev if y in cogs_d}
+        gm_latest, gm_trend, gm_r2 = margin_trend(gp_proxy, rev)
+
     yahoo_gm = stock.get("gross_margin") or 0
-    if yahoo_gm and abs(gm - yahoo_gm) > 0.10:
-        gm = (gm + yahoo_gm) / 2  # average if divergent
 
-    sga_pct   = avg_margin(sga, rev) if sga else 0.15
-    rd_pct    = avg_margin(rd, rev) if rd else 0.0
-    op_margin = avg_margin(oi, rev) if oi else max(gm - sga_pct - rd_pct, 0.05)
-    if not op_margin or op_margin < 0.01:
-        op_margin = stock.get("op_margin") or max(gm - sga_pct - rd_pct, 0.05)
+    # Use exp-weighted avg as base; blend with Yahoo LTM if divergent
+    if gp:
+        gm_wavg = avg_margin(gp, rev, n=4, weighted=True)
+    else:
+        gp_proxy = {y: rev[y] - cogs_d.get(y, 0) for y in rev if y in cogs_d}
+        gm_wavg  = avg_margin(gp_proxy, rev, n=4, weighted=True)
 
-    tax_rate = avg_margin(te, data["pretax_inc"]) if te and data["pretax_inc"] else 0.21
-    tax_rate = max(min(tax_rate, 0.38), 0.10)
+    if not gm_wavg or gm_wavg < 0.01:
+        gm_wavg = yahoo_gm or 0.50
+    if yahoo_gm and abs(gm_wavg - yahoo_gm) > 0.12:
+        gm_wavg = 0.6 * gm_wavg + 0.4 * yahoo_gm
 
-    dep_pct   = avg_margin(dep, rev) if dep else 0.04
-    capex_pct = abs(avg_margin(capex, rev)) if capex else 0.06
+    # Project margin with trend (dampened — trend fades over time)
+    # Only trust trend if R² > 0.6 (strong signal)
+    gm_proj = []
+    gm = gm_wavg
+    for i in range(n_proj):
+        if gm_r2 > 0.60:
+            # Apply trend but dampen it 20% per year (reverts to mean)
+            trend_adj = gm_trend * (0.80 ** i)
+            gm = gm + trend_adj
+        gm = max(0.10, min(0.95, gm))  # hard bounds
+        gm_proj.append(round(gm, 4))
 
-    last_lt_debt = last_val(lt_debt)
-    last_eq = last_val(eq)
-    de_ratio = last_lt_debt / last_eq if last_eq else 0.5
+    print(f"    ✓ Gross margin: {gm_wavg:.1%} | trend: {gm_trend:+.2%}/yr "
+          f"(R²={gm_r2:.2f}) | projected: {[f'{g:.1%}' for g in gm_proj]}")
 
-    last_ie = last_val(data["interest_exp"])
+    # ── Operating Margin ───────────────────────────────────────────────────────
+    om_latest, om_trend, om_r2 = margin_trend(oi, rev) if oi else (0, 0, 0)
+    om_wavg = avg_margin(oi, rev, n=4, weighted=True) if oi else 0
+
+    if not om_wavg or abs(om_wavg) < 0.001:
+        om_wavg = stock.get("op_margin") or 0
+    if not om_wavg:
+        om_wavg = max(gm_wavg - 0.25, 0.01)  # rough estimate
+
+    # Operating leverage — if DOL is high, margins expand with revenue growth
+    dol = operating_leverage(rev, oi)
+
+    # Project operating margin with operating leverage and trend
+    om_proj = []
+    om = om_wavg
+    for i in range(n_proj):
+        rev_g_i = rev_growth[i]
+        # Margin expansion from operating leverage: DOL × rev_growth × leverage_factor
+        leverage_boost = (dol - 1) * rev_g_i * 0.3  # scale down — partial benefit
+        # Trend component (dampened)
+        trend_adj = om_trend * (0.75 ** i) if om_r2 > 0.55 else 0
+        om = om + leverage_boost + trend_adj
+        # Mean-revert toward industry-appropriate operating margin
+        target_om = {"hyper_growth": 0.15, "high_growth": 0.20,
+                     "mature_growth": 0.22, "stable": 0.18,
+                     "turnaround": 0.10, "declining": 0.05}.get(stage, 0.15)
+        om = om + 0.10 * (target_om - om)   # 10% reversion per year
+        om = max(-0.20, min(0.60, om))       # hard bounds
+        om_proj.append(round(om, 4))
+
+    print(f"    ✓ Op margin: {om_wavg:.1%} | DOL: {dol:.2f} | "
+          f"projected: {[f'{g:.1%}' for g in om_proj]}")
+
+    # ── SG&A and R&D ──────────────────────────────────────────────────────────
+    sga_pct = avg_margin(sga, rev, n=4, weighted=True) if sga else 0.15
+    rd_pct  = avg_margin(rd, rev, n=4, weighted=True) if rd else 0.0
+
+    # SG&A typically shows slight scale efficiency — falls as % of rev over time
+    _, sga_trend, sga_r2 = margin_trend(sga, rev) if sga else (0, 0, 0)
+    sga_proj = []
+    s = sga_pct
+    for i in range(n_proj):
+        if sga_r2 > 0.55:
+            s = s + sga_trend * (0.70 ** i)
+        s = max(0.02, min(0.60, s))
+        sga_proj.append(round(s, 4))
+
+    # ── Tax Rate ───────────────────────────────────────────────────────────────
+    # Use exp-weighted average to give more weight to recent effective tax rate
+    tax_rate = avg_margin(te, data["pretax_inc"], n=4, weighted=True)                if te and data["pretax_inc"] else 0.21
+    tax_rate = max(min(tax_rate, 0.38), 0.05)
+
+    # ── CapEx — Split Maintenance vs Growth ───────────────────────────────────
+    maint_cx_pct, growth_cx_pct = maintenance_vs_growth_capex(capex, dep, rev)
+    total_capex_pct = maint_cx_pct + growth_cx_pct
+
+    # Growth CapEx scales with revenue growth; maintenance CapEx is more stable
+    capex_proj = []
+    for i in range(n_proj):
+        # Maintenance stays constant; growth CapEx scales with revenue growth rate
+        growth_adj = growth_cx_pct * (1 + rev_growth[i] * 0.5)
+        cx_i = maint_cx_pct + growth_adj
+        cx_i = max(0.01, min(0.30, cx_i))
+        capex_proj.append(round(cx_i, 4))
+
+    print(f"    ✓ CapEx: total {total_capex_pct:.1%} = "
+          f"maintenance {maint_cx_pct:.1%} + growth {growth_cx_pct:.1%}")
+
+    # ── D&A ────────────────────────────────────────────────────────────────────
+    dep_pct = avg_margin(dep, rev, n=4, weighted=True) if dep else 0.04
+    # D&A grows with PP&E; tie to avg capex roughly
+    dep_pct = max(dep_pct, maint_cx_pct * 0.8)   # at least 80% of maint capex
+
+    # ── NWC ────────────────────────────────────────────────────────────────────
+    nwc_pct = nwc_ratio(ca, cl, rev)
+    # NWC change = growth × NWC ratio (cash drag from working capital build)
+    nwc_change_proj = [round(rev_growth[i] * nwc_pct, 4) for i in range(n_proj)]
+
+    # ── Debt & Capital Structure ───────────────────────────────────────────────
+    last_lt_debt = last_val(lt_debt) or 0
+    last_eq      = last_val(eq) or 1
+    de_ratio     = last_lt_debt / last_eq
+
+    # Debt paydown schedule — assume 5% annual paydown if profitable, 0% if not
+    last_oi = last_val(oi) or 0
+    annual_paydown = 0.05 if last_oi > 0 else 0.0
+    debt_proj = []
+    d = last_lt_debt
+    for i in range(n_proj):
+        d = d * (1 - annual_paydown)
+        debt_proj.append(round(d, 0))
+
+    last_ie  = last_val(data.get("interest_exp", {})) or 0
     int_rate = last_ie / last_lt_debt if last_lt_debt and last_lt_debt > 0 else 0.04
     int_rate = max(min(int_rate, 0.10), 0.02)
 
+    # ── Beta & Cost of Capital ─────────────────────────────────────────────────
     beta = stock.get("beta", 1.0) or 1.0
+    # For unprofitable hyper-growth companies, use higher ERP to reflect risk
+    if stage == "hyper_growth" and (last_val(ni) or 0) < 0:
+        erp = 0.065   # slightly higher risk premium
+    else:
+        erp = 0.055
 
-    dps_s = data["dps"]; eps_s = data["eps_diluted"]
+    # ── Payout / Dividends ────────────────────────────────────────────────────
+    dps_s = data.get("dps", {}); eps_s = data.get("eps_diluted", {})
     payout = stock.get("payout_ratio") or 0.0
     if not payout and dps_s and eps_s:
-        pv = [dps_s[y]/eps_s[y] for y in dps_s if y in eps_s and eps_s[y] and eps_s[y]>0]
+        pv = [dps_s[y]/eps_s[y] for y in dps_s
+              if y in eps_s and eps_s[y] and eps_s[y] > 0]
         payout = sum(pv[-3:]) / len(pv[-3:]) if pv else 0.0
 
+    # ── Scenarios ─────────────────────────────────────────────────────────────
+    def make_scenario(rev_mult, margin_mult):
+        return {
+            "rev_growth":  [round(min(g * rev_mult, 0.60), 4) for g in rev_growth],
+            "gross_margin":[round(min(g * margin_mult, 0.95), 4) for g in gm_proj],
+            "op_margin":   [round(max(o * margin_mult, -0.20), 4) for o in om_proj],
+            "capex_pct":   capex_proj,
+        }
+
+    scenarios = {
+        "bull": make_scenario(rev_mult=1.25, margin_mult=1.10),
+        "base": make_scenario(rev_mult=1.00, margin_mult=1.00),
+        "bear": make_scenario(rev_mult=0.70, margin_mult=0.88),
+    }
+
+    print(f"    ✓ Scenarios: Bull rev g Yr1={scenarios['bull']['rev_growth'][0]:.1%} | "
+          f"Bear rev g Yr1={scenarios['bear']['rev_growth'][0]:.1%}")
+
     return {
-        "rev_growth":    rev_growth,
-        "gross_margin":  round(gm, 4),
-        "sga_pct":       round(sga_pct, 4),
-        "rd_pct":        round(rd_pct, 4),
-        "op_margin":     round(op_margin, 4),
-        "tax_rate":      round(tax_rate, 4),
-        "dep_pct":       round(dep_pct, 4),
-        "capex_pct":     round(capex_pct, 4),
-        "interest_rate": round(int_rate, 4),
-        "payout_ratio":  round(min(payout, 0.95), 4),
-        "beta":          round(beta, 2),
-        "rf_rate":       0.045,
-        "erp":           0.055,
-        "lt_growth":     0.03,
-        "de_ratio":      round(de_ratio, 4),
-        "analyst_yr1_growth": analyst_yr1_growth,
+        # Core projections (base case)
+        "rev_growth":          rev_growth,
+        "gross_margin":        round(gm_wavg, 4),
+        "gross_margin_proj":   gm_proj,
+        "sga_pct":             round(sga_pct, 4),
+        "sga_proj":            sga_proj,
+        "rd_pct":              round(rd_pct, 4),
+        "op_margin":           round(om_wavg, 4),
+        "op_margin_proj":      om_proj,
+        "tax_rate":            round(tax_rate, 4),
+        "dep_pct":             round(dep_pct, 4),
+        "capex_pct":           round(total_capex_pct, 4),
+        "capex_proj":          capex_proj,
+        "maint_capex_pct":     maint_cx_pct,
+        "growth_capex_pct":    growth_cx_pct,
+        "nwc_pct":             round(nwc_pct, 4),
+        "nwc_change_proj":     nwc_change_proj,
+        "interest_rate":       round(int_rate, 4),
+        "payout_ratio":        round(min(payout, 0.95), 4),
+        "debt_proj":           debt_proj,
+        # Capital structure
+        "beta":                round(beta, 2),
+        "rf_rate":             0.045,
+        "erp":                 erp,
+        "lt_growth":           0.03,
+        "de_ratio":            round(de_ratio, 4),
+        "dol":                 round(dol, 2),
+        # Company classification
+        "stage":               stage,
+        "industry_avg_growth": industry_avg_g,
+        # Trend signals
+        "gm_trend":            round(gm_trend, 4),
+        "gm_r2":               round(gm_r2, 3),
+        "om_trend":            round(om_trend, 4),
+        "om_r2":               round(om_r2, 3),
+        # Scenarios
+        "scenarios":           scenarios,
+        # Analyst data
+        "analyst_yr1_growth":  analyst_yr1_growth,
+        "analyst_count":       analyst_count,
     }
 
 # ── Excel Builder ─────────────────────────────────────────────────────────────
@@ -858,48 +1203,64 @@ def _assumptions(wb, data, assumptions, hist_years, proj_years):
         c = ws.cell(row=row+1, column=PROJ_COL_START+i, value=f"{yr}E")
         c.font = ft(bold=True, color=WHITE, size=9); c.fill = fl(MID_BLUE); c.alignment = aln("center")
 
+    # Pull per-year projected arrays from smarter forecasting engine
+    gm_proj_arr  = assumptions.get("gross_margin_proj",  [assumptions["gross_margin"]] * n_proj)
+    om_proj_arr  = assumptions.get("op_margin_proj",     [assumptions["op_margin"]]    * n_proj)
+    sga_proj_arr = assumptions.get("sga_proj",           [assumptions["sga_pct"]]      * n_proj)
+    cx_proj_arr  = assumptions.get("capex_proj",         [assumptions["capex_pct"]]    * n_proj)
+    stage        = assumptions.get("stage", "unknown")
+    dol          = assumptions.get("dol", 1.0)
+    gm_trend     = assumptions.get("gm_trend", 0)
+    om_trend     = assumptions.get("om_trend", 0)
+    maint_cx     = assumptions.get("maint_capex_pct", 0)
+    growth_cx    = assumptions.get("growth_capex_pct", 0)
+    nwc_pct      = assumptions.get("nwc_pct", 0)
+    a_count      = assumptions.get("analyst_count", 0)
+    ind_avg_g    = assumptions.get("industry_avg_growth", 0.07)
+
     MARGIN_ASS_ROWS = {}
     margin_items = [
         # (key, label, values_list, fmt, source_text, peer_val)
         ("rev_growth", "Revenue Growth Rate",
-         assumptions["rev_growth"], "0.0%",
-         f"Based on 3-year historical CAGR ({cagr(data['revenue'],3):.1%}) from SEC 10-K filings. "
-         f"Tapers gradually toward steady-state. Yr1 reflects management guidance and consensus estimates.",
+         assumptions["rev_growth"][:n_proj], "0.0%",
+         f"Stage: {stage}. Blends {a_count}-analyst consensus (dynamic weight) with 3yr & 5yr "
+         f"historical CAGRs. Mean-reverts to industry avg {ind_avg_g:.0%} over projection period.",
          stock.get("revenue_growth")),
-        ("gross_margin", "Gross Margin",
-         [assumptions["gross_margin"]]*n_proj, "0.0%",
-         f"3-year average from SEC 10-K cost of revenue data ({last_10k_date}). "
-         f"Assumes stable margins reflecting pricing power and scale.",
+        ("gross_margin", "Gross Margin (per-year, trend-adjusted)",
+         gm_proj_arr[:n_proj], "0.0%",
+         f"Exp-weighted 4yr avg. Margin trend: {gm_trend:+.2%}/yr "
+         f"(R²={assumptions.get('gm_r2',0):.2f}). Trend applied if R²>0.60, dampened 20%/yr.",
          avg_peer_gm),
-        ("sga_pct", "SG&A as % of Revenue",
-         [assumptions["sga_pct"]]*n_proj, "0.0%",
-         f"3-year average SG&A/Revenue from SEC EDGAR. Marketing, sales force, "
-         f"and G&A costs held roughly flat as % of revenue.",
+        ("sga_pct", "SG&A as % of Revenue (per-year)",
+         sga_proj_arr[:n_proj], "0.0%",
+         f"Exp-weighted avg with scale efficiency trend. SG&A typically falls as % of revenue at scale.",
          None),
         ("rd_pct", "R&D as % of Revenue",
-         [assumptions["rd_pct"]]*n_proj, "0.0%",
-         f"SEC EDGAR R&D expense / revenue (3yr avg). High R&D reflects innovation investment "
-         f"consistent with management's stated AI/product priorities.",
+         [assumptions["rd_pct"]] * n_proj, "0.0%",
+         f"Exp-weighted 4yr avg R&D/Revenue. Held constant — R&D is a strategic choice.",
          None),
-        ("op_margin", "Operating Margin (EBIT)",
-         [assumptions["op_margin"]]*n_proj, "0.0%",
-         f"Derived from gross margin minus SG&A and R&D. Cross-checked vs. reported EBIT. "
-         f"Management guidance incorporated where available.",
+        ("op_margin", "Operating Margin (per-year, with OpLev)",
+         om_proj_arr[:n_proj], "0.0%",
+         f"Operating leverage (DOL={dol:.2f}) applied. Op margin trend: {om_trend:+.2%}/yr. "
+         f"Mean-reverts toward stage-appropriate target margin.",
          avg_peer_opm),
         ("dep_pct", "D&A as % of Revenue",
-         [assumptions["dep_pct"]]*n_proj, "0.0%",
-         f"3-year average depreciation & amortization as % of revenue from SEC cash flow statements. "
-         f"Reflects PP&E and intangible amortization schedule.",
+         [assumptions["dep_pct"]] * n_proj, "0.0%",
+         f"Exp-weighted 4yr avg D&A/Revenue. Floor = 80% of maintenance CapEx ({maint_cx:.1%}).",
          None),
-        ("capex_pct", "CapEx as % of Revenue",
-         [assumptions["capex_pct"]]*n_proj, "0.0%",
-         f"3-year average capital expenditure / revenue. Management has signaled continued infrastructure "
-         f"investment (data centers, AI compute). Held at historical pace.",
+        ("capex_pct", "CapEx: Maintenance + Growth (per-year)",
+         cx_proj_arr[:n_proj], "0.0%",
+         f"Split: Maintenance {maint_cx:.1%} (stable, ≈D&A) + "
+         f"Growth {growth_cx:.1%} (scales with revenue growth rate).",
+         None),
+        ("nwc_pct", "NWC Change as % of Revenue",
+         [nwc_pct] * n_proj, "0.0%",
+         f"Net working capital / revenue from balance sheet. "
+         f"NWC cash drag = revenue growth × {nwc_pct:.1%}. Higher NWC = more cash consumed at growth.",
          None),
         ("payout_ratio", "Dividend Payout Ratio",
-         [assumptions["payout_ratio"]]*n_proj, "0.0%",
-         f"Historical DPS / EPS ratio from SEC filings. Zero if no dividend history. "
-         f"Reflects management's stated capital return priorities.",
+         [assumptions["payout_ratio"]] * n_proj, "0.0%",
+         f"Historical DPS/EPS ratio from SEC filings. Zero if no dividend history.",
          None),
     ]
 
