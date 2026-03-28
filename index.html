@@ -926,25 +926,10 @@ function renderResults(data) {
     <div class="section-rule-line"></div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);border:1px solid var(--rule);margin-bottom:24px" class="fade-in-delay-4">
-    <div style="background:white;padding:14px 16px">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">Company Stage</div>
-      <div style="font-size:15px;font-weight:600;text-transform:capitalize">${(dcf.stage||'').replace('_',' ')}</div>
-    </div>
-    <div style="background:white;padding:14px 16px">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">Operating Leverage</div>
-      <div style="font-size:15px;font-weight:600">${fmt(dcf.dol||1,2,'','x')}</div>
-      <div style="font-size:10px;color:var(--muted)">Margin sensitivity to growth</div>
-    </div>
-    <div style="background:white;padding:14px 16px">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">Gross Margin Trend</div>
-      <div style="font-size:15px;font-weight:600;color:${(dcf.gm_trend||0)>=0?'#1a6b2e':'#a81e1e'}">${(dcf.gm_trend||0)>=0?'+':''}{fmt((dcf.gm_trend||0)*100,2,'','pp/yr')}</div>
-      <div style="font-size:10px;color:var(--muted)">Expansion vs compression</div>
-    </div>
-    <div style="background:white;padding:14px 16px">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">Op Margin Trend</div>
-      <div style="font-size:15px;font-weight:600;color:${(dcf.om_trend||0)>=0?'#1a6b2e':'#a81e1e'}">${(dcf.om_trend||0)>=0?'+':''}{fmt((dcf.om_trend||0)*100,2,'','pp/yr')}</div>
-      <div style="font-size:10px;color:var(--muted)">Operating leverage signal</div>
-    </div>
+    ${buildModelSignalCard('Company Stage', (dcf.stage||'unknown').replace(/_/g,' '), '', null, 'Classification used for mean-reversion targets')}
+    ${buildModelSignalCard('Operating Leverage', fmt(dcf.dol||1, 2, '', 'x'), '', null, 'DOL: margin sensitivity to revenue growth')}
+    ${buildModelSignalCard('Gross Margin Trend', fmtTrend(dcf.gm_trend), '', dcf.gm_trend, 'Annual pp change in gross margin (linear regression, last 4yr)')}
+    ${buildModelSignalCard('Op Margin Trend', fmtTrend(dcf.om_trend), '', dcf.om_trend, 'Annual pp change in op margin (linear regression, last 4yr)')}
   </div>
 
   <!-- Quarterly Trends -->
@@ -992,6 +977,38 @@ function renderResults(data) {
   resultsEl.innerHTML = html;
   resultsEl.classList.add('active');
   resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function fmtTrend(val) {
+  // val is a decimal like 0.023 meaning +2.3pp/yr
+  if (val === null || val === undefined || isNaN(val)) return 'N/A';
+  const pp = val * 100;
+  const sign = pp >= 0 ? '+' : '';
+  return sign + pp.toFixed(2) + ' pp/yr';
+}
+
+function buildModelSignalCard(label, value, unit, trendVal, subtext) {
+  // trendVal: if provided, color the value green/red based on sign
+  let color = 'var(--ink)';
+  let bg = 'white';
+  let indicator = '';
+  if (trendVal !== null && trendVal !== undefined && !isNaN(trendVal)) {
+    if (trendVal > 0.005) {
+      color = '#1a6b2e'; bg = '#f0faf3';
+      indicator = '<span style="font-size:18px;margin-right:4px">▲</span>';
+    } else if (trendVal < -0.005) {
+      color = '#a81e1e'; bg = '#fdf0f0';
+      indicator = '<span style="font-size:18px;margin-right:4px">▼</span>';
+    } else {
+      color = '#8a6d10'; bg = '#fdf8e8';
+      indicator = '<span style="font-size:18px;margin-right:4px">→</span>';
+    }
+  }
+  return `<div style="background:${bg};padding:14px 16px">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">${label}</div>
+    <div style="font-size:15px;font-weight:600;color:${color};text-transform:capitalize">${indicator}${value}${unit}</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:3px">${subtext}</div>
+  </div>`;
 }
 
 function signalColor(signal) {
