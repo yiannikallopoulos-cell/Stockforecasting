@@ -844,17 +844,17 @@ function renderResults(data) {
     secScenarioBar = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:12px;">'
       + '<div style="background:#fce8e8;padding:14px 18px;text-align:center">'
       + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#a81e1e;font-weight:600;margin-bottom:4px">Bear Case</div>'
-      + '<div style="font-family:'DM Serif Display',serif;font-size:22px;color:#a81e1e">$' + fmt(dcf.bear_price,2) + '</div>'
+      + '<div style="font-family:DM Serif Display,serif;font-size:22px;color:#a81e1e">$' + fmt(dcf.bear_price,2) + '</div>'
       + '<div style="font-size:11px;color:#a81e1e;margin-top:2px">' + bearUp + '</div>'
       + '<div style="font-size:10px;color:#999;margin-top:3px">70% rev growth · 88% margins</div></div>'
       + '<div style="background:var(--cream);padding:14px 18px;text-align:center;border-left:3px solid var(--ink);border-right:3px solid var(--ink)">'
       + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink);font-weight:600;margin-bottom:4px">Base Case ★</div>'
-      + '<div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--ink)">$' + fmt(dcf.dcf_price,2) + '</div>'
+      + '<div style="font-family:DM Serif Display,serif;font-size:22px;color:var(--ink)">$' + fmt(dcf.dcf_price,2) + '</div>'
       + '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + baseUp + '</div>'
       + '<div style="font-size:10px;color:#999;margin-top:3px">Model-derived assumptions</div></div>'
       + '<div style="background:#e8f5ec;padding:14px 18px;text-align:center">'
       + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#1a6b2e;font-weight:600;margin-bottom:4px">Bull Case</div>'
-      + '<div style="font-family:'DM Serif Display',serif;font-size:22px;color:#1a6b2e">$' + fmt(dcf.bull_price,2) + '</div>'
+      + '<div style="font-family:DM Serif Display,serif;font-size:22px;color:#1a6b2e">$' + fmt(dcf.bull_price,2) + '</div>'
       + '<div style="font-size:11px;color:#1a6b2e;margin-top:2px">' + bullUp + '</div>'
       + '<div style="font-size:10px;color:#999;margin-top:3px">125% rev growth · 110% margins</div></div>'
       + '</div>';
@@ -1117,7 +1117,7 @@ function buildInsiderCard(summary) {
 
   return `<div style="background:${bg};border:1px solid var(--rule);padding:18px 20px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:${color};font-weight:600;margin-bottom:8px">Insider Activity</div>
-    <div style="font-family:'DM Serif Display',serif;font-size:20px;color:${color};margin-bottom:6px">${sig.replace(/_/g,' ').toUpperCase()}</div>
+    <div style="font-family:DM Serif Display,serif;font-size:20px;color:${color};margin-bottom:6px">${sig.replace(/_/g,' ').toUpperCase()}</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">${desc}</div>
     <div style="font-size:11px;margin-bottom:8px"><span style="color:#1a6b2e;font-weight:600">${buys} buys</span> &nbsp;·&nbsp; <span style="color:#a81e1e;font-weight:600">${sells} sells</span> (last 6mo)</div>
     ${txnRows ? `<div style="margin-top:8px">${txnRows}</div>` : ''}
@@ -1137,7 +1137,7 @@ function buildShortInterestCard(summary) {
 
   return `<div style="background:${bg};border:1px solid var(--rule);padding:18px 20px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:${color};font-weight:600;margin-bottom:8px">Short Interest</div>
-    <div style="font-family:'DM Serif Display',serif;font-size:32px;color:${color};line-height:1">${pct > 0 ? pct.toFixed(1)+'%' : '—'}</div>
+    <div style="font-family:DM Serif Display,serif;font-size:32px;color:${color};line-height:1">${pct > 0 ? pct.toFixed(1)+'%' : '—'}</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">of float is short</div>
     ${pct > 0 ? `<div style="height:6px;background:var(--rule);border-radius:3px;margin-bottom:8px">
       <div style="height:100%;width:${barW}%;background:${barColor};border-radius:3px"></div>
@@ -1156,7 +1156,7 @@ function buildIVCard(summary) {
 
   return `<div style="background:${bg};border:1px solid var(--rule);padding:18px 20px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:${color};font-weight:600;margin-bottom:8px">Options Implied Volatility</div>
-    <div style="font-family:'DM Serif Display',serif;font-size:32px;color:${color};line-height:1">${iv > 0 ? iv.toFixed(0)+'%' : '—'}</div>
+    <div style="font-family:DM Serif Display,serif;font-size:32px;color:${color};line-height:1">${iv > 0 ? iv.toFixed(0)+'%' : '—'}</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">30-day ATM implied vol</div>
     ${pc > 0 ? `<div style="font-size:13px;font-weight:600;margin-bottom:6px">P/C Ratio: ${pc.toFixed(2)} <span style="font-size:10px;font-weight:400;color:var(--muted)">${pc > 1.2 ? '(bearish skew)' : pc < 0.8 ? '(bullish skew)' : '(neutral)'}</span></div>` : ''}
     <div style="font-size:11px;color:${color};font-style:italic">${desc.substring(0,120)}</div>
