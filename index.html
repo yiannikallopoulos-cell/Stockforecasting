@@ -495,7 +495,7 @@
   .chart-wrap {
     background: white;
     border: 1px solid var(--rule);
-    padding: 24px;
+    padding: 28px 24px 20px;
     margin-bottom: 24px;
   }
   .chart-title {
@@ -506,18 +506,54 @@
     color: var(--muted);
     margin-bottom: 16px;
   }
-  .bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 120px; }
-  .bar-group { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
-  .bar-track { flex: 1; display: flex; align-items: flex-end; width: 100%; }
+  .bar-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    height: 240px;          /* 2× taller — much more readable */
+    padding: 8px 0 0;
+  }
+  .bar-group {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    height: 100%;
+  }
+  .bar-track {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    width: 100%;
+    position: relative;
+  }
   .bar {
     width: 100%;
-    transition: height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
-    min-height: 4px;
+    transition: height 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+    min-height: 6px;
+    border-radius: 3px 3px 0 0;
   }
   .bar.hist { background: var(--ink); }
-  .bar.proj { background: var(--gold); opacity: 0.7; }
-  .bar-label { font-size: 10px; color: var(--muted); text-align: center; white-space: nowrap; }
-  .bar-val   { font-size: 10px; font-weight: 600; text-align: center; }
+  .bar.proj { background: var(--gold); }
+  .bar-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .bar-val {
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+    white-space: nowrap;
+  }
+  /* Divider between historical and projected bars */
+  .bar-group.proj-first {
+    border-left: 2px dashed var(--rule);
+    padding-left: 4px;
+  }
 
   /* ── Analyst strip ── */
   .analyst-strip {
@@ -633,31 +669,49 @@ function gaugePosition(upsidePct) {
 }
 
 function buildBarChart(histYears, histRevenue, projGrowth) {
-  const maxRev = Math.max(...histRevenue);
   const lastRev = histRevenue[histRevenue.length - 1] || 1;
+
+  // Build full projected revenue list first
+  const projRevs = [];
+  let curRev = lastRev;
+  projGrowth.forEach(g => {
+    curRev = curRev * (1 + g / 100);
+    projRevs.push(curRev);
+  });
+
+  // Single unified max across ALL bars so growth is visually accurate
+  const allVals = [...histRevenue, ...projRevs];
+  const maxRev  = Math.max(...allVals) * 1.08;  // 8% headroom so tallest bar isn't flush to top
+
   let bars = '';
-  // Historical
+
+  // Historical bars
   histYears.forEach((yr, i) => {
-    const h = Math.round((histRevenue[i] / maxRev) * 100);
+    const v = histRevenue[i] || 0;
+    const h = Math.max(4, Math.round((v / maxRev) * 100));
     bars += `<div class="bar-group">
-      <div class="bar-val">${fmt(histRevenue[i], 1, '$', 'B')}</div>
+      <div class="bar-val">${fmt(v, 1, '$', 'B')}</div>
       <div class="bar-track"><div class="bar hist" style="height:${h}%"></div></div>
       <div class="bar-label">${yr}</div>
     </div>`;
   });
-  // Projected
-  let curRev = lastRev;
-  projGrowth.forEach((g, i) => {
-    curRev = curRev * (1 + g / 100);
-    const projMax = Math.max(maxRev, curRev);
-    const h = Math.round((curRev / projMax) * 100);
-    const yr = parseInt(histYears[histYears.length - 1]) + i + 1;
-    bars += `<div class="bar-group">
-      <div class="bar-val" style="color:var(--gold)">${fmt(curRev, 1, '$', 'B')}</div>
+
+  // Projected bars — first one gets a dashed left border to show boundary
+  projRevs.forEach((v, i) => {
+    const h   = Math.max(4, Math.round((v / maxRev) * 100));
+    const yr  = parseInt(histYears[histYears.length - 1]) + i + 1;
+    const cls = i === 0 ? 'bar-group proj-first' : 'bar-group';
+    const chg = i === 0
+      ? fmtPct(((v / lastRev) - 1) * 100 / projGrowth.length)
+      : fmtPct(projGrowth[i]);
+    bars += `<div class="${cls}">
+      <div class="bar-val" style="color:var(--gold)">${fmt(v, 1, '$', 'B')}</div>
       <div class="bar-track"><div class="bar proj" style="height:${h}%"></div></div>
       <div class="bar-label" style="color:var(--gold)">${yr}E</div>
+      <div class="bar-label" style="color:var(--gold);font-style:italic">${chg}</div>
     </div>`;
   });
+
   return bars;
 }
 
@@ -1107,39 +1161,61 @@ function buildQuarterlySection(summary) {
   const qrev = summary.quarterly_revenue || {};
   const qgm  = summary.quarterly_gross_margin || {};
   const qom  = summary.quarterly_op_margin || {};
-  const accel= summary.recent_rev_accel;
+  const accel = summary.recent_rev_accel;
 
-  const qKeys = Object.keys(qrev).sort().slice(-6);
+  const qKeys = Object.keys(qrev).sort().slice(-8);  // up to 8 quarters = 2 years
   if (qKeys.length < 2) return '';
 
-  const maxRev = Math.max(...qKeys.map(k => qrev[k] || 0));
+  // Unified max with headroom
+  const allVals = qKeys.map(k => qrev[k] || 0);
+  const maxRev  = Math.max(...allVals) * 1.08;
 
   let bars = '';
-  qKeys.forEach(k => {
-    const rv = qrev[k] || 0;
-    const gm = qgm[k];
-    const h  = maxRev > 0 ? Math.round((rv/maxRev)*100) : 0;
-    const label = k.length > 7 ? k.substring(2,7) : k;
+  qKeys.forEach((k, i) => {
+    const rv  = qrev[k] || 0;
+    const gm  = qgm[k];
+    const om  = qom[k];
+    const h   = maxRev > 0 ? Math.max(4, Math.round((rv / maxRev) * 100)) : 4;
+
+    // Compute QoQ vs same quarter last year (4 quarters ago)
+    let yoyPct = null;
+    if (i >= 4) {
+      const prevK = qKeys[i - 4];
+      const prevV = qrev[prevK];
+      if (prevV && prevV > 0) yoyPct = ((rv - prevV) / prevV) * 100;
+    }
+
+    // Label: use last 5 chars of key for quarter label (e.g. "2024-" → "24-Q3")
+    const label = k.length >= 7 ? k.substring(2, 7) : k;
+
     bars += `<div class="bar-group">
-      <div class="bar-val" style="font-size:9px">${fmt(rv,1,'$','B')}</div>
+      <div class="bar-val" style="font-size:10px">${fmt(rv, 1, '$', 'B')}</div>
       <div class="bar-track"><div class="bar hist" style="height:${h}%"></div></div>
       <div class="bar-label">${label}</div>
-      ${gm !== undefined ? `<div class="bar-label" style="color:var(--gold)">${fmt(gm,1,'','%')}</div>` : ''}
+      ${gm !== undefined
+        ? `<div class="bar-label" style="color:var(--gold);font-weight:600">${fmt(gm, 1, '', '%')}</div>`
+        : ''}
+      ${yoyPct !== null
+        ? `<div class="bar-label" style="color:${yoyPct >= 0 ? '#1a6b2e' : '#a81e1e'};font-size:9px">${yoyPct >= 0 ? '+' : ''}${yoyPct.toFixed(1)}% YoY</div>`
+        : ''}
     </div>`;
   });
 
-  const accelText = accel !== 0 && accel !== null && accel !== undefined
-    ? `<span style="font-size:11px;padding:3px 10px;background:${accel>0?'#e8f5ec':'#fce8e8'};color:${accel>0?'#1a6b2e':'#a81e1e'};font-weight:600;margin-left:12px">${accel>0?'▲ Accelerating':'▼ Decelerating'} ${Math.abs(accel*100).toFixed(1)}pp QoQ</span>`
+  const accelText = (accel !== 0 && accel !== null && accel !== undefined)
+    ? `<span style="font-size:11px;padding:3px 10px;background:${accel > 0 ? '#e8f5ec' : '#fce8e8'};color:${accel > 0 ? '#1a6b2e' : '#a81e1e'};font-weight:600;margin-left:12px">${accel > 0 ? '▲ Accelerating' : '▼ Decelerating'} ${Math.abs(accel * 100).toFixed(1)}pp QoQ</span>`
     : '';
 
   return `
   <div class="section-rule fade-in-delay-4">
-    <span class="section-rule-label">Quarterly Revenue Trend${accelText}</span>
+    <span class="section-rule-label">Quarterly Revenue Trend (Last 8 Quarters)${accelText}</span>
     <div class="section-rule-line"></div>
-    <span class="section-rule-label" style="color:var(--gold)">Gold % = Gross Margin</span>
+    <span class="section-rule-label" style="color:var(--gold)">■ Gold % = Gross Margin</span>
   </div>
-  <div class="chart-wrap fade-in-delay-4">
+  <div class="chart-wrap fade-in-delay-4" style="padding:28px 24px 20px;">
     <div class="bar-chart">${bars}</div>
+    <div style="margin-top:12px;font-size:10px;color:var(--muted);font-style:italic">
+      Green/red % = Year-over-year revenue growth per quarter · Gold % = Gross margin
+    </div>
   </div>`;
 }
 
